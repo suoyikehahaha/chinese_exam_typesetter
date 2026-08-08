@@ -32,7 +32,7 @@ DOCX 的读取、排版和导出由程序直接完成，启动和日常编辑不
 
 ```powershell
 python -m app.cli build samples\exam.json --config templates\layout.yaml --output output
-python windows_launcher.py
+python windows_launcher_v045_final.py
 ```
 
 ## 边界说明

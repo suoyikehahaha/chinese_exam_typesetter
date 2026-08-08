@@ -11,8 +11,8 @@ from app.version import APP_VERSION
 
 
 class RuntimeV01Tests(unittest.TestCase):
-    def test_version_is_current_0_2(self) -> None:
-        self.assertEqual(APP_VERSION, "0.2.0")
+    def test_version_matches_current_release(self) -> None:
+        self.assertEqual(APP_VERSION, "0.4.5")
 
     def test_block_ids_are_stable_and_unique(self) -> None:
         raw = {"blocks": [{"type": "instruction"}, {"type": "question", "question": {}}]}

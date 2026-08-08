@@ -12,8 +12,8 @@ from urllib.request import Request, urlopen
 import webbrowser
 
 
-GITHUB_REPOSITORY = "https://github.com/suoyikehahaha/-"
-GITHUB_API = "https://api.github.com/repos/suoyikehahaha/-/releases/latest"
+GITHUB_REPOSITORY = "https://github.com/suoyikehahaha/chinese_exam_typesetter"
+GITHUB_API = "https://api.github.com/repos/suoyikehahaha/chinese_exam_typesetter/releases/latest"
 USER_AGENT = "ChineseExamTypesetter/0.4.5"
 
 

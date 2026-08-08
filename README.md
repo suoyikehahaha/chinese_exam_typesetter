@@ -1,6 +1,6 @@
 # 高中语文试卷智能排版系统
 
-当前开发版本为 0.2.0。软件面向高中语文试卷的结构识别、模板排版、实时预览和 DOCX 导出。
+当前发布版本为 0.4.5。软件面向高中语文试卷的结构识别、模板排版、实时预览和 DOCX 导出。
 
 ## 当前工作流程
 
@@ -37,7 +37,7 @@ python windows_launcher.py
 
 ## 边界说明
 
-当前桌面导入范围为可编辑 Word 文档。扫描件 OCR、PDF 导入和 PDF 导出均不属于 0.2.0 的工作流程。表格、图片和原文字符装饰继续由 DOCX 原生对象保护逻辑处理。
+当前桌面导入范围为可编辑 Word 文档。扫描件 OCR、PDF 导入和 PDF 导出均不属于 0.4.5 的工作流程。表格、图片和原文字符装饰继续由 DOCX 原生对象保护逻辑处理。
 
 ## v0.4.5 发布说明
 
@@ -47,6 +47,6 @@ python windows_launcher.py
 
 软件内置“帮助 > GitHub 更新页面”，可以在软件内部查看最新版本、更新说明和发布文件。页面访问 GitHub 公开接口，不上传试题内容。
 
-请在 [GitHub Releases](https://github.com/suoyikehahaha/-/releases) 下载 Windows 版本。
+请在 [GitHub Releases](https://github.com/suoyikehahaha/chinese_exam_typesetter/releases) 下载 Windows 版本。
 
 本软件为本人（公众号：蓑衣微言）为高中语文试题排版而做。未经本人书面许可，不得销售、出租、收费分发、嵌入商业服务或用于其他营利活动。

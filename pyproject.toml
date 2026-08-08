@@ -1,0 +1,15 @@
+[project]
+name = "chinese-exam-typesetter"
+version = "0.2.0"
+description = "高中语文试卷结构化排版与 DOCX 导出"
+requires-python = ">=3.11"
+dependencies = [
+  "python-docx>=1.1",
+  "PyYAML>=6.0",
+  "Pillow>=10.0",
+  "pypdf>=5.0",
+  "pypdfium2>=4.30",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

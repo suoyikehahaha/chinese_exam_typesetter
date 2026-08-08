@@ -1,0 +1,17 @@
+template:
+  expected_filename: "2026年全国Ⅱ卷语文试题（模板）.docx"
+  status: unavailable_in_current_workspace
+  preserve_original: true
+  output_must_differ_from_template: true
+
+distillation:
+  required_when_template_available: true
+  artifact_contract: "work/template-distillation/artifact.md"
+  required_checks:
+    - sha256
+    - page_and_section_count
+    - page_geometry
+    - styles
+    - headers_and_footers
+    - numbering
+    - visual_page_diff

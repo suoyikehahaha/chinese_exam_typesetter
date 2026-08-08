@@ -1,0 +1,129 @@
+page:
+  width_mm: 210
+  height_mm: 297
+  margin_top_mm: 20
+  margin_bottom_mm: 18
+  margin_left_mm: 22
+  margin_right_mm: 18
+  header_distance_mm: 10
+  footer_distance_mm: 10
+
+fonts:
+  songti: SimSun
+  heiti: SimHei
+  kaiti: KaiTi
+  fangsong: FangSong
+
+defaults:
+  body_line_spacing: 1.25
+  paragraph_after_pt: 0
+
+styles:
+  exam_name:
+    font: SimSun
+    size_pt: 16
+    alignment: center
+    bold: false
+    space_after_pt: 3
+  subject_name:
+    font: SimHei
+    size_pt: 22
+    alignment: center
+    bold: false
+    space_after_pt: 6
+  exam_meta:
+    font: SimSun
+    size_pt: 10.5
+    first_line_indent_chars: 2
+  notice_title:
+    font: SimHei
+    size_pt: 10.5
+    bold: false
+  notice_body:
+    font: SimSun
+    size_pt: 10.5
+    first_line_indent_chars: 2
+  section_title:
+    font: SimHei
+    size_pt: 12
+    bold: false
+    keep_with_next: true
+    space_before_pt: 4
+  subsection:
+    font: SimSun
+    size_pt: 10.5
+    keep_with_next: true
+    space_before_pt: 2
+  instruction:
+    font: SimSun
+    size_pt: 10.5
+    first_line_indent_chars: 2
+  material_title:
+    font: SimHei
+    size_pt: 10.5
+    alignment: center
+    keep_with_next: true
+  material_author:
+    font: FangSong
+    size_pt: 10.5
+    alignment: center
+    keep_with_next: true
+  material_body:
+    font: KaiTi
+    size_pt: 10.5
+    first_line_indent_chars: 2
+  material_note:
+    font: FangSong
+    size_pt: 9
+    first_line_indent_chars: 2
+  material_source:
+    font: FangSong
+    size_pt: 10.5
+    alignment: right
+  objective_stem:
+    font: SimSun
+    size_pt: 10.5
+    first_line_indent_chars: 0
+  subjective_stem:
+    font: SimSun
+    size_pt: 10.5
+    first_line_indent_chars: 1.5
+  choice_option:
+    font: SimSun
+    size_pt: 10.5
+    left_indent_chars: 1.5
+    hanging_indent_chars: 1.7
+  embedded_label:
+    font: SimSun
+    size_pt: 10.5
+  embedded_body:
+    font: KaiTi
+    size_pt: 10.5
+  segmentation_text:
+    font: KaiTi
+    size_pt: 10.5
+    first_line_indent_chars: 2
+  segmentation_marker:
+    font: SimSun
+    size_pt: 10.5
+    boxed: true
+  subquestion:
+    font: SimSun
+    size_pt: 10.5
+    first_line_indent_chars: 1.5
+  poetry:
+    font: KaiTi
+    size_pt: 10.5
+    alignment: center
+  composition_material:
+    font: KaiTi
+    size_pt: 10.5
+    first_line_indent_chars: 2
+  composition_prompt:
+    font: SimSun
+    size_pt: 10.5
+    first_line_indent_chars: 2
+  composition_requirements:
+    font: SimSun
+    size_pt: 10.5
+    first_line_indent_chars: 2

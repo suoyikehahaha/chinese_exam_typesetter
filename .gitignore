@@ -1,0 +1,30 @@
+# Python and local tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Local previews, temporary files and generated exports
+work/
+output/
+outputs/
+temp/
+tmp/
+*.pdf
+/output/
+/outputs/
+
+# Windows build products and release binaries
+build/
+dist/
+release-v*/
+*.spec.bak
+
+# Local settings and editor files
+settings.json
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini

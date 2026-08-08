@@ -1,0 +1,275 @@
+{
+  "metadata": {
+    "exam_name": "2026年普通高等学校招生全国统一考试（全国Ⅱ卷）",
+    "subject_name": "语　文",
+    "meta_text": "本试卷共23小题，满分150分。考试用时150分钟。",
+    "total_score": 150,
+    "notices": [
+      "答卷前，考生务必将自己的姓名、准考证号填写在答题卡上。",
+      "作答选择题时，选出每小题答案后，用铅笔把答题卡上对应题目的答案标号涂黑。",
+      "非选择题必须用黑色字迹的钢笔或签字笔作答，答案必须写在答题卡各题目指定区域内。",
+      "考试结束后，将本试卷和答题卡一并交回。"
+    ]
+  },
+  "blocks": [
+    {"type": "section_title", "text": "一、阅读（72分）"},
+    {"type": "subsection", "name": "（一）阅读Ⅰ", "meta": "（本题共5小题，18分）"},
+    {"type": "instruction", "text": "阅读下面的文字，完成1～5题。"},
+    {
+      "type": "material",
+      "paragraphs": [
+        "木构桥梁的营造既要回应河流、地势与材料，也要处理交通和聚落生活的实际需要。工匠通过观察水势、选择木料、安排构件，使桥体在受力与使用之间取得稳定。",
+        "桥上的廊屋为行人遮风避雨，也让桥成为交往与交易的场所。技术结构由此进入日常生活，并在长期使用和维修中不断调整。"
+      ],
+      "note": "[注]本段为系统验收用示例文字，不对应原试卷正文。",
+      "source": "（示例材料）"
+    },
+    {
+      "type": "question",
+      "question": {
+        "number": 1,
+        "kind": "objective",
+        "stem": "下列对材料相关内容的理解和分析，不正确的一项是",
+        "score": 3,
+        "options": ["A．桥梁营造需要考虑自然条件。", "B．廊屋具有遮蔽风雨的功能。", "C．桥梁技术与聚落生活毫无联系。", "D．构件安排关系到桥体受力。"]
+      }
+    },
+    {
+      "type": "question",
+      "question": {
+        "number": 2,
+        "kind": "objective",
+        "stem": "根据材料内容，下列说法正确的一项是",
+        "score": 3,
+        "options": ["A．材料选择可以脱离当地条件。", "B．桥梁只承担通行功能。", "C．维修会推动技术经验调整。", "D．廊屋必然改变河流水势。"]
+      }
+    },
+    {
+      "type": "question",
+      "question": {
+        "number": 3,
+        "kind": "subjective",
+        "stem": "请根据材料补写下面说明中的空缺内容。",
+        "score": 3,
+        "embedded_segments": [
+          [{"text": "一、桥梁如何适应环境：", "role": "label"}, {"text": "观察水势，并结合地势选择结构。", "role": "body"}],
+          [{"text": "二、廊屋有什么作用：", "role": "label"}, {"text": "遮风避雨，并为交往活动提供空间。", "role": "body"}]
+        ]
+      }
+    },
+    {
+      "type": "question",
+      "question": {"number": 4, "kind": "subjective", "stem": "材料如何说明技术与生活之间的关系？请简要概括。", "score": 4}
+    },
+    {
+      "type": "question",
+      "question": {
+        "number": 5,
+        "kind": "subjective",
+        "stem": "围绕传统技术的保存与使用，材料提供了哪些启示？",
+        "score": 5,
+        "embedded_segments": [
+          [{"text": "观点一：", "role": "label"}, {"text": "保存结构知识，重视维修经验。", "role": "body"}],
+          [{"text": "观点二：", "role": "label"}, {"text": "关注技术在当代生活中的真实用途。", "role": "body"}]
+        ]
+      }
+    },
+
+    {"type": "subsection", "name": "（二）阅读Ⅱ", "meta": "（本题共4小题，18分）"},
+    {"type": "instruction", "text": "阅读下面的文字，完成6～9题。"},
+    {
+      "type": "material",
+      "title": "打橘子",
+      "author": "俞平伯",
+      "paragraphs": [
+        "院中的橘树到了深秋，果实渐渐明亮。孩子们仰头望着，等大人取来竹竿。竹竿触到枝叶时，细碎的声音从树冠里落下来。",
+        "有人扶着篮子，有人寻找滚到石阶旁的橘子。短暂的忙乱过后，院子又安静下来，只留下清苦而新鲜的香气。"
+      ],
+      "note": "[注]抵桩：打算。",
+      "source": "（选自《燕知草》，有删改）"
+    },
+    {
+      "type": "question",
+      "question": {
+        "number": 6,
+        "kind": "objective",
+        "stem": "下列对文本相关内容和艺术特色的分析鉴赏，不正确的一项是",
+        "score": 3,
+        "options": ["A．文章写出了深秋院落的生活气息。", "B．人物动作推动了场景变化。", "C．结尾借气味延续读者感受。", "D．全文主要依靠议论展开。"]
+      }
+    },
+    {"type": "question", "question": {"number": 7, "kind": "subjective", "stem": "文中“细碎的声音”具有怎样的表达效果？", "score": 4}},
+    {"type": "question", "question": {"number": 8, "kind": "subjective", "stem": "作者如何组织“打橘子”这一生活场景？", "score": 5}},
+    {
+      "type": "question",
+      "question": {
+        "number": 9,
+        "kind": "subjective",
+        "stem": "下面三个文段都写到日常经验，请比较其表达侧重点。",
+        "score": 6,
+        "embedded_segments": [
+          [{"text": "文段①：", "role": "label"}, {"text": "我记得竹竿碰到枝叶时，院里忽然有了秋天的声音。", "role": "body"}],
+          [{"text": "文段②：", "role": "label"}, {"text": "橘子滚过石阶，孩子们追上去，笑声比果实更快。", "role": "body"}],
+          [{"text": "文段③：", "role": "label"}, {"text": "人群散去以后，空气里仍有一点清苦的香气。", "role": "body"}]
+        ]
+      }
+    },
+
+    {"type": "subsection", "name": "（三）阅读Ⅲ", "meta": "（本题共5小题，21分）"},
+    {"type": "instruction", "text": "阅读下面的文言文，完成10～14题。"},
+    {
+      "type": "material",
+      "paragraphs": [
+        "古之为政者，察土宜，顺民时，劝农桑，谨储积。岁有丰歉，则通有无以济之。故民知所务，而上下相安。",
+        "及其法久而弊生，善治者因事损益，不拘成说，亦不轻变旧章。"
+      ],
+      "note": "[注]土宜：土地所适宜的作物。",
+      "source": "（节选自某古代农书，示例）"
+    },
+    {
+      "type": "question",
+      "question": {
+        "number": 10,
+        "kind": "subjective",
+        "stem": "材料中画波浪线的部分有三处需要断句，请写出相应字母。",
+        "score": 3,
+        "segmentation_text": "此等岂好A为烦扰B而轻费损哉C盖以庸人D之性E率之F则自力G纵之H则惰窳耳"
+      }
+    },
+    {
+      "type": "question",
+      "question": {
+        "number": 11,
+        "kind": "objective",
+        "stem": "下列对材料中词语及相关内容的解说，不正确的一项是",
+        "score": 3,
+        "option_layout": "two_column",
+        "options": ["A．宜，适宜。", "B．劝，鼓励。", "C．济，渡河。", "D．益，增加。"]
+      }
+    },
+    {
+      "type": "question",
+      "question": {
+        "number": 12,
+        "kind": "objective",
+        "stem": "下列对材料有关内容的概述，不正确的一项是",
+        "score": 3,
+        "options": ["A．治理者应观察土地条件。", "B．丰歉之年需要调剂物资。", "C．旧制度永远无需调整。", "D．改变旧章需要保持谨慎。"]
+      }
+    },
+    {
+      "type": "question",
+      "question": {
+        "number": 13,
+        "kind": "subjective",
+        "stem": "把材料中画横线的句子翻译成现代汉语。",
+        "score": 8,
+        "subquestions": ["岁有丰歉，则通有无以济之。", "善治者因事损益，不拘成说。"]
+      }
+    },
+    {"type": "question", "question": {"number": 14, "kind": "subjective", "stem": "材料认为调整制度时应把握哪些原则？", "score": 4}},
+
+    {"type": "subsection", "name": "（四）阅读Ⅳ", "meta": "（本题共3小题，15分）"},
+    {"type": "instruction", "text": "阅读下面两首唐诗，完成15～17题。"},
+    {
+      "type": "poetry",
+      "title": "骢马[注]",
+      "author": "杨炯",
+      "paragraphs": ["骢马铁连钱，", "长安侠少年。", "帝畿平若水，", "宫路直如弦。"],
+      "note": "[注]骢马：青白杂毛的马。"
+    },
+    {
+      "type": "poetry",
+      "title": "骢马",
+      "author": "沈佺期",
+      "paragraphs": ["西北五花骢，", "来时道向东。", "四蹄碧玉片，", "双眼黄金瞳。"]
+    },
+    {
+      "type": "question",
+      "question": {
+        "number": 15,
+        "kind": "objective",
+        "stem": "下列对这两首诗的理解和赏析，不正确的一项是",
+        "score": 3,
+        "options": ["A．两诗都以骢马为描写对象。", "B．诗中均有鲜明的色彩词。", "C．两诗完全没有人物活动。", "D．诗句保留了整齐的分行。"]
+      }
+    },
+    {"type": "question", "question": {"number": 16, "kind": "subjective", "stem": "两首诗描写骢马时使用的角度有何异同？", "score": 6}},
+    {
+      "type": "question",
+      "question": {
+        "number": 17,
+        "kind": "subjective",
+        "stem": "补写出下列句子中的空缺部分。",
+        "score": 6,
+        "subquestions": ["诗中写道路平直的两句是“________，________”。", "借马蹄色泽写骢马神采的句子是“________”。", "古诗文中以江月寄情的名句还有“________，________”。"]
+      }
+    },
+
+    {"type": "section_title", "text": "二、语言文字运用（本题共5小题，18分）"},
+    {"type": "instruction", "text": "阅读下面的文字，完成18～22题。"},
+    {
+      "type": "material",
+      "paragraphs": [
+        "清晨，日光越过屋脊，院中的植物逐渐显出层次。观察者若只记下颜色，容易忽略光线、风向和时间共同造成的变化。",
+        "准确的语言需要辨认差异，也需要选择合适的句式，把观察所得传递给读者。"
+      ],
+      "note": "[注]朝暾：初升的太阳。"
+    },
+    {"type": "question", "question": {"number": 18, "kind": "subjective", "stem": "请在文中横线处填入恰当的成语。", "score": 3}},
+    {
+      "type": "question",
+      "question": {
+        "number": 19,
+        "kind": "objective",
+        "stem": "下列句子中的“层次”与文中用法相同的一项是",
+        "score": 3,
+        "options": ["A．文章层次清楚。", "B．收入层次不同。", "C．植物显出明暗层次。", "D．提高管理层次。"]
+      }
+    },
+    {"type": "question", "question": {"number": 20, "kind": "subjective", "stem": "文中画横线的句子有语病，请修改。", "score": 4}},
+    {
+      "type": "question",
+      "question": {
+        "number": 21,
+        "kind": "objective",
+        "stem": "下列各句中的逗号，和文中逗号作用相同的一项是",
+        "score": 3,
+        "options": ["A．风停了，树叶仍在晃动。", "B．北京、上海、广州。", "C．他说，明天出发。", "D．这本书，我读过。"]
+      }
+    },
+    {
+      "type": "question",
+      "question": {
+        "number": 22,
+        "kind": "subjective",
+        "stem": "请分析下面两句话的构成特点和表达效果。",
+        "score": 5,
+        "embedded_segments": [
+          [{"text": "酌古：", "role": "label"}, {"text": "从旧经验中辨认可用的方法。", "role": "body"}],
+          [{"text": "斟今：", "role": "label"}, {"text": "在现实条件中检验方法的效用。", "role": "body"}]
+        ]
+      }
+    },
+
+    {"type": "section_title", "text": "三、写作（60分）"},
+    {
+      "type": "question",
+      "question": {
+        "number": 23,
+        "kind": "subjective",
+        "stem": "阅读下面的材料，根据要求写作。",
+        "score": 60,
+        "composition_material": [
+          "“日月不失其体，故蔽而复明；江汉不失其源，故穷而复通。”事物在变化中保持根本，也在受阻时寻找新的通路。"
+        ],
+        "composition_prompt": [
+          "以上材料引发了你怎样的联想和思考？请写一篇文章。"
+        ],
+        "composition_requirements": [
+          "要求：选准角度，确定立意，明确文体，自拟标题；不要套作，不得抄袭；不得泄露个人信息；不少于800字。"
+        ]
+      }
+    }
+  ]
+}

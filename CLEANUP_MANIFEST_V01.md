@@ -25,6 +25,8 @@
 
 当前 Windows 入口的继承链为：
 
-`windows_launcher_v045_final` → `desktop_app_v045` → `desktop_app_v041` → `desktop_app_v04` → `desktop_app_v03` → `desktop_app_current_v01` → `desktop_app_current` → `desktop_app_v087_release` → `desktop_app_v086_answer_release` → `desktop_app_v085_release` → `desktop_app_v084_fixed` → `desktop_app_v083_production` → `desktop_app_v082` → `desktop_app_v081` → `desktop_app_v080` → `desktop_app_v070` → `desktop_app_v060` → `desktop_app_v050`。
+`windows_launcher_v045_final` → `desktop_app_v045` → `desktop_app_v04` → `desktop_app_v03` → `desktop_app_current_v01` → `desktop_app_current` → `desktop_app_v087_release` → `desktop_app_v086_answer_release` → `desktop_app_v085_release` → `desktop_app_v084_fixed` → `desktop_app_v083_production` → `desktop_app_v082` → `desktop_app_v081` → `desktop_app_v080` → `desktop_app_v070` → `desktop_app_v060` → `desktop_app_v050`。
+
+The v0.4.1 and v0.4 wrapper layers (`desktop_app_v041.py`, `desktop_app_v04_final.py`, `desktop_app_v04_stable.py`, and `desktop_app_v04_release.py`) were merged into `desktop_app_v045.py`. Their behavior remains at the current entry point, while the deeper feature layers stay active until a replacement has been validated.
 
 因此 GitHub 中看到的 `desktop_app_v060` 至 `desktop_app_v087` 并非孤立备份文件。它们是当前运行链的一部分，删除前需要先完成一次整体架构合并，再重新进行 EXE 启动、导入、预览和导出回归。

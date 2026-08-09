@@ -8,6 +8,7 @@ import importlib
 import json
 import os
 import sys
+from threading import Event
 from pathlib import Path
 
 from windows_launcher import _install_startup_fix
@@ -55,8 +56,25 @@ def _question_numbers(data: dict) -> list[int]:
 
 
 def _run_import_test(module: object, source: Path, output: Path) -> int:
-    data = module.import_exam(source)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        data = module.import_exam(source)
+    except Exception as exc:
+        output.write_text(
+            json.dumps(
+                {
+                    "status": "IMPORT_FAILED",
+                    "source": source.name,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return 1
     result = {
+        "status": "IMPORT_OK",
         "source": source.name,
         "blocks": len(data.get("blocks", [])),
         "questions": _question_numbers(data),
@@ -65,7 +83,6 @@ def _run_import_test(module: object, source: Path, output: Path) -> int:
             for item in data.get("diagnostics", [])
         ),
     }
-    output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
     return 0
 
@@ -95,8 +112,125 @@ def _run_font_test(output: Path) -> int:
     return 0 if values["all_cjk_fonts_valid"] else 2
 
 
+def _run_preview_test(module: object, source: Path, output: Path) -> int:
+    """Render one real DOCX through the packaged internal preview service."""
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    service = None
+    try:
+        raw_exam = module.import_exam(source)
+        from app.preview_service_v043 import PreviewService
+
+        service = PreviewService()
+        ready = Event()
+        results: list[object] = []
+
+        def receive(result: object) -> None:
+            results.append(result)
+            ready.set()
+
+        service.submit(raw_exam, Path("templates/layout.yaml"), None, receive)
+        if not ready.wait(120):
+            raise TimeoutError("预览任务超过 120 秒未完成")
+        result = results[0]
+        if isinstance(result, Exception):
+            raise result
+        payload = {
+            "status": "PREVIEW_OK",
+            "source": source.name,
+            "engine": result.engine,
+            "actual_pages": result.actual_pages,
+            "target_pages": result.target_pages,
+            "rendered_pages": len(result.pages),
+            "locators": len(result.locators),
+            "first_page_exists": bool(result.pages and result.pages[0].is_file()),
+        }
+        output.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return 0
+    except Exception as exc:
+        output.write_text(
+            json.dumps(
+                {
+                    "status": "PREVIEW_FAILED",
+                    "source": source.name,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return 1
+    finally:
+        if service is not None:
+            service.close()
+
+
+def _run_export_test(module: object, source: Path, output: Path) -> int:
+    """Build a DOCX from one real DOCX import using the packaged pipeline."""
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    export_dir = output.parent / f"{output.stem}-docx"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        from app.current_pipeline_v04 import build_documents
+
+        raw_exam = module.import_exam(source)
+        docx_path, pdf_path, engine = build_documents(
+            raw_exam,
+            Path("templates/layout.yaml"),
+            export_dir,
+            f"{source.stem}（排版）",
+            export_docx=True,
+            export_pdf=False,
+        )
+        payload = {
+            "status": "EXPORT_OK",
+            "source": source.name,
+            "docx": str(docx_path) if docx_path else "",
+            "docx_exists": bool(docx_path and docx_path.is_file()),
+            "pdf": str(pdf_path) if pdf_path else "",
+            "engine": engine,
+        }
+        output.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return 0
+    except Exception as exc:
+        output.write_text(
+            json.dumps(
+                {
+                    "status": "EXPORT_FAILED",
+                    "source": source.name,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return 1
+
+
 def _run_startup_test(module: object, output: Path) -> int:
-    app = module.CurrentDesktopApp()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps({"status": "GUI_STARTUP_CONSTRUCTING"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    try:
+        app = module.CurrentDesktopApp()
+    except Exception as exc:
+        output.write_text(
+            json.dumps(
+                {
+                    "status": "GUI_STARTUP_FAILED",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return 1
 
     def finish() -> None:
         payload = {
@@ -107,7 +241,6 @@ def _run_startup_test(module: object, output: Path) -> int:
             "preview": type(app.document_editor).__name__,
             "drop_enabled": bool(app.drop_enabled),
         }
-        output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         app._on_close()
 
@@ -193,6 +326,14 @@ def main() -> int:
     module = _load_application()
     if "--font-test-output" in sys.argv:
         return _run_font_test(Path(sys.argv[sys.argv.index("--font-test-output") + 1]))
+    if "--preview-test" in sys.argv:
+        source = Path(sys.argv[sys.argv.index("--preview-test") + 1])
+        output = Path(sys.argv[sys.argv.index("--test-output") + 1])
+        return _run_preview_test(module, source, output)
+    if "--export-test" in sys.argv:
+        source = Path(sys.argv[sys.argv.index("--export-test") + 1])
+        output = Path(sys.argv[sys.argv.index("--test-output") + 1])
+        return _run_export_test(module, source, output)
     if "--drop-message-test" in sys.argv:
         source = Path(sys.argv[sys.argv.index("--drop-message-test") + 1])
         output = Path(sys.argv[sys.argv.index("--test-output") + 1])

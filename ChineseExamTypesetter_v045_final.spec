@@ -40,8 +40,7 @@ binaries = [
     (str(dll_root / "tk86t.dll"), "."),
 ]
 hiddenimports = [
-    "desktop_app_v045", "desktop_app_v041", "desktop_app_v04_final",
-    "desktop_app_v04_stable", "desktop_app_v04_release", "desktop_app_v04",
+    "desktop_app_v045", "desktop_app_v04",
     "desktop_app_v03", "desktop_app_current_v01",
     "app.current_importer_v14", "app.flexible_importers_v13", "app.windows_drop_v03",
     "app.github_update_page_v01",
@@ -65,5 +64,6 @@ exe = EXE(
     bootloader_ignore_signals=False, strip=False, upx=True, upx_exclude=[],
     runtime_tmpdir=None, console=False, disable_windowed_traceback=False,
     argv_emulation=False, target_arch=None, codesign_identity=None,
-    entitlements_file=None, icon=[str(project_root / "assets" / "app-icon-v1.ico")],
+    entitlements_file=None, contents_directory=".",
+    icon=[str(project_root / "assets" / "app-icon-v1.ico")],
 )

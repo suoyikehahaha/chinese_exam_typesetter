@@ -6,7 +6,12 @@ import unittest
 
 from docx import Document
 
-from app.flexible_importers_v13 import NumberingLevel, _format_prefix, materialize_automatic_numbering
+from app.flexible_importers_v13 import (
+    NumberingLevel,
+    _format_prefix,
+    _numbering_definitions,
+    materialize_automatic_numbering,
+)
 
 
 class NumberingImportV044Tests(unittest.TestCase):
@@ -35,6 +40,17 @@ class NumberingImportV044Tests(unittest.TestCase):
             loaded = Document(source)
             materialize_automatic_numbering(loaded)
             self.assertEqual(Document(source).paragraphs[0].text, "题干文字（3分）")
+
+    def test_missing_numbering_relationship_is_safe(self) -> None:
+        class MissingNumberingDocument:
+            class Part:
+                @property
+                def numbering_part(self) -> object:
+                    raise KeyError("numbering")
+
+            part = Part()
+
+        self.assertEqual(_numbering_definitions(MissingNumberingDocument()), {})
 
 
 if __name__ == "__main__":

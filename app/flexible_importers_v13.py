@@ -71,7 +71,13 @@ def materialize_automatic_numbering(document: Any) -> int:
 
 
 def _numbering_definitions(document: Any) -> dict[tuple[int, int], NumberingLevel]:
-    root = document.part.numbering_part.element
+    try:
+        root = document.part.numbering_part.element
+    except (AttributeError, KeyError, NotImplementedError):
+        # Some valid DOCX files have no numbering relationship at all.  They
+        # still contain ordinary paragraphs and should continue through the
+        # normal parser without requiring a synthetic numbering part.
+        return {}
     abstract: dict[int, dict[int, NumberingLevel]] = {}
     for item in root.findall(qn("w:abstractNum")):
         abstract_id = int(item.get(qn("w:abstractNumId")))

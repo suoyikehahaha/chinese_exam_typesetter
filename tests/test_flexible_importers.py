@@ -2,10 +2,6 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-from reportlab.pdfgen import canvas
-
 from app.editor_importers import import_exam, parse_plain_lines
 
 
@@ -67,32 +63,14 @@ class FlexibleImporterTests(unittest.TestCase):
         self.assertEqual("objective", question["kind"])
         self.assertEqual(4, len(question["options"]))
 
-    def test_text_pdf_import(self) -> None:
+    def test_pdf_import_is_rejected_current_scope(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "exam.pdf"
-            pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
-            pdf = canvas.Canvas(str(path))
-            pdf.setFont("STSong-Light", 12)
-            y = 800
-            for line in [
-                "语文限时训练",
-                "1．下列说法正确的一项是（3分）",
-                "A．甲",
-                "B．乙",
-                "C．丙",
-                "D．丁",
-            ]:
-                pdf.drawString(72, y, line)
-                y -= 24
-            pdf.save()
-            raw = import_exam(path)
-            question = next(
-                block["question"]
-                for block in raw["blocks"]
-                if block.get("type") == "question"
-            )
-            self.assertEqual(1, question["number"])
-            self.assertEqual(4, len(question["options"]))
+            path.write_bytes(b"%PDF-placeholder")
+            with self.assertRaisesRegex(
+                ValueError, "\u4e0d\u518d\u63d0\u4f9b PDF \u5bfc\u5165"
+            ):
+                import_exam(path)
 
 
 if __name__ == "__main__":

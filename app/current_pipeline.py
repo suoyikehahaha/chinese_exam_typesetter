@@ -11,34 +11,33 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from .answer_overrides_v1 import apply_answer_overrides_v1
-from .answer_typesetting_v1 import append_answer_to_docx, exam_blocks, render_answer_docx
-from .chinese_typography_v2 import enable_chinese_typography_v2
+from .answer_overrides import apply_answer_overrides
+from .answer_typesetting import append_answer_to_docx, exam_blocks, render_answer_docx
+from .chinese_typography import enable_chinese_typography
 from .config import load_layout
-from .contextual_formatting_v5 import apply_contextual_formatting_v5
-from .contextual_formatting_v6 import apply_contextual_formatting_v6
-from .contextual_formatting_v9 import apply_contextual_formatting_v9
-from .contextual_formatting_v10 import apply_contextual_formatting_v10
-from .contextual_formatting_v11 import apply_contextual_formatting_v11
-from .exam_format_rules_v3 import apply_exam_format_rules_v3
-from .header_extras_v1 import apply_header_extras_v1
-from .inline_formatting_v3 import apply_inline_formats_v3
+from .exam_context_formatting import apply_exam_context_formatting
+from .exam_format_rules import apply_exam_format_rules
+from .header_extras import apply_header_extras
+from .header_normalization import apply_header_normalization
+from .inline_formatting import apply_inline_formats
 from .models import ExamDocument
 from .models.identity import ensure_block_ids
 from .native_docx_objects import restore_native_objects
+from .page_layout import adjusted_layout
+from .page_target import spacing_scale_for_target
 from .pagination import apply_pagination_guards
-from .paragraph_formatting_v1 import apply_paragraph_formats_v1
-from .pdf_exporter_silent import SilentPdfExporter
+from .paragraph_formatting import apply_paragraph_formats
 from .renderers import DocxRenderer
-from .segmentation_formatting_v2 import apply_segmentation_formatting_v2
-from .semantic_formatting_v4 import apply_semantic_formatting_v4
-from .source_decorations_v1 import restore_source_decorations_v1
+from .run_formatting import protect_inline_properties
+from .segmentation_formatting import apply_segmentation_formatting
+from .semantic_formatting import apply_semantic_formatting
+from .source_decorations import restore_source_decorations
 from .style_registry import StyleRegistry
 from .validators import check_required_fonts
-from .validators.exam_validator_v2 import validate_exam
+from .validators import validate_exam
 
 
-def build_documents(
+def _render_documents(
     raw_exam: dict[str, Any],
     layout_path: str | Path,
     output_dir: str | Path,
@@ -48,7 +47,7 @@ def build_documents(
     export_docx: bool = True,
     export_pdf: bool = False,
     temporary_dir: str | Path | None = None,
-) -> tuple[Path | None, Path | None, str]:
+) -> tuple[Path | None, None, str]:
     """Render one exam or answer document with an explicit pass sequence."""
 
     ensure_block_ids(raw_exam)
@@ -81,39 +80,133 @@ def build_documents(
         exam_document = ExamDocument.from_dict(exam_raw)
         DocxRenderer(layout, template_path).render(exam_document, docx_path)
         _run_exam_passes(docx_path, exam_raw)
-        apply_contextual_formatting_v9(docx_path, exam_raw)
         append_answer_to_docx(docx_path, raw_exam)
-        restore_source_decorations_v1(docx_path, raw_exam)
+        restore_source_decorations(docx_path, raw_exam)
 
-    apply_answer_overrides_v1(docx_path, raw_exam)
-    apply_contextual_formatting_v10(docx_path, raw_exam)
-    apply_contextual_formatting_v11(docx_path, raw_exam)
+    apply_answer_overrides(docx_path, raw_exam)
+    apply_header_normalization(docx_path, raw_exam)
 
-    pdf_path: Path | None = None
-    engine = "docx-only"
-    if export_pdf:
-        pdf_path, engine = SilentPdfExporter().export(
-            docx_path,
-            output / f"{basename}.pdf",
+    return (docx_path if export_docx else None), None, "docx-only"
+
+
+def build_documents(
+    raw_exam: dict[str, Any],
+    layout_path: str | Path,
+    output_dir: str | Path,
+    basename: str,
+    *,
+    template_path: str | Path | None = None,
+    export_docx: bool = True,
+    export_pdf: bool = False,
+    temporary_dir: str | Path | None = None,
+) -> tuple[Path | None, None, str]:
+    """Build DOCX with target-page spacing, page overrides and run protection."""
+
+    adjusted_exam = deepcopy(raw_exam)
+    _adjust_inline_spacing(adjusted_exam, spacing_scale_for_target(adjusted_exam))
+    output = Path(output_dir)
+    work = Path(temporary_dir) if temporary_dir else output
+    work.mkdir(parents=True, exist_ok=True)
+    target_layout = work / "layout-targeted.yaml"
+    target_layout.write_text(
+        _dump_yaml(adjusted_layout(load_layout(layout_path), adjusted_exam)),
+        encoding="utf-8",
+    )
+    try:
+        docx_path, _unused_pdf, _unused_engine = _render_documents(
+            adjusted_exam,
+            target_layout,
+            output,
+            basename,
+            template_path=template_path,
+            export_docx=export_docx,
+            export_pdf=False,
+            temporary_dir=work,
         )
-    return (docx_path if export_docx else None), pdf_path, engine
+    finally:
+        target_layout.unlink(missing_ok=True)
+    if docx_path is not None:
+        protect_inline_properties(docx_path)
+    return docx_path, None, "docx-only"
 
 
 def _run_exam_passes(docx_path: Path, raw_exam: dict[str, Any]) -> None:
     """Apply deterministic DOCX passes in one documented order."""
 
-    apply_header_extras_v1(docx_path, raw_exam)
+    apply_header_extras(docx_path, raw_exam)
     apply_pagination_guards(docx_path)
     restore_native_objects(docx_path, raw_exam)
-    apply_semantic_formatting_v4(docx_path)
-    apply_exam_format_rules_v3(docx_path)
-    apply_paragraph_formats_v1(docx_path, raw_exam)
-    apply_inline_formats_v3(docx_path, raw_exam)
-    enable_chinese_typography_v2(docx_path)
-    apply_contextual_formatting_v5(docx_path, raw_exam)
-    apply_contextual_formatting_v6(docx_path, raw_exam)
-    apply_segmentation_formatting_v2(docx_path)
-    restore_source_decorations_v1(docx_path, raw_exam)
+    apply_semantic_formatting(docx_path)
+    apply_exam_format_rules(docx_path)
+    apply_paragraph_formats(docx_path, raw_exam)
+    apply_inline_formats(docx_path, raw_exam)
+    enable_chinese_typography(docx_path)
+    apply_exam_context_formatting(docx_path, raw_exam)
+    apply_segmentation_formatting(docx_path)
+    restore_source_decorations(docx_path, raw_exam)
+
+
+def _adjust_inline_spacing(raw_exam: dict[str, Any], scale: float) -> None:
+    """Apply a bounded rhythm change to explicit paragraph overrides."""
+
+    for block in raw_exam.get("blocks", []):
+        specs: list[dict[str, Any]] = []
+        if block.get("type") == "question":
+            question = block.get("question", {})
+            if isinstance(question.get("format"), dict):
+                specs.append(question["format"])
+            specs.extend(
+                item
+                for item in question.get("paragraph_formats", [])
+                if isinstance(item, dict)
+            )
+        specs.extend(
+            item
+            for item in block.get("paragraph_formats", [])
+            if isinstance(item, dict)
+        )
+        if isinstance(block.get("format"), dict):
+            specs.append(block["format"])
+        for spec in specs:
+            if "line_spacing" in spec:
+                spec["line_spacing"] = max(
+                    0.95,
+                    min(1.8, float(spec["line_spacing"]) * scale),
+                )
+            for key in ("space_before_pt", "space_after_pt"):
+                if key in spec:
+                    spec[key] = max(0.0, float(spec[key]) * scale)
+
+
+def _dump_yaml(data: dict[str, Any]) -> str:
+    """Serialize the small nested mapping accepted by the bundled YAML reader."""
+
+    lines: list[str] = []
+
+    def visit(mapping: dict[str, Any], indent: int) -> None:
+        for key, value in mapping.items():
+            prefix = " " * indent + f"{key}:"
+            if isinstance(value, dict):
+                lines.append(prefix)
+                visit(value, indent + 2)
+            else:
+                lines.append(f"{prefix} {_yaml_scalar(value)}")
+
+    visit(data, 0)
+    return "\n".join(lines) + "\n"
+
+
+def _yaml_scalar(value: Any) -> str:
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if value is None:
+        return "null"
+    text = str(value)
+    if any(character in text for character in (":", "#", "\n")):
+        return '"' + text.replace('"', '\\"') + '"'
+    return text
 
 
 __all__ = ["build_documents"]

@@ -1,4 +1,4 @@
-"""材料标签与出处等语义格式。"""
+"""Semantic formatting for labels, notes and sources."""
 
 from __future__ import annotations
 
@@ -12,37 +12,43 @@ from docx.oxml.ns import qn
 from docx.shared import Pt
 
 
-MATERIAL_LABEL_RE = re.compile(
-    r"^(材料(?:[一二三四五六七八九十]+|\d+)\s*[：:])\s*(.*)$"
+LABEL_RE = re.compile(
+    r"^((?:材料|文本)(?:[一二三四五六七八九十]+|\d+)\s*[：:])\s*(.*)$"
+)
+NOTE_RE = re.compile(
+    r"^\s*(?:【\s*注\s*】|\[\s*注\s*\]|［\s*注\s*］|注\s*[：:])"
 )
 SOURCE_RE = re.compile(
-    r"^\s*[（(]\s*(?:摘编自|选自|节选自|改编自|据).+[）)]\s*$"
+    r"^\s*[（(]\s*(?:(?:摘编自|选自|节选自|改编自|据).+|本文.+)[）)]\s*$"
 )
 
 
 def apply_semantic_formatting(docx_path: str | Path) -> None:
-    """应用材料标签黑体五号和出处仿宋五号右对齐。"""
+    """Apply the confirmed semantic styles after rendering."""
 
     target = Path(docx_path)
     document = Document(target)
     for paragraph in _all_paragraphs(document):
         text = paragraph.text.strip()
-        label_match = MATERIAL_LABEL_RE.match(text)
-        if label_match:
-            _format_material_label(
-                paragraph,
-                label_match.group(1),
-                label_match.group(2),
-            )
+        match = LABEL_RE.match(text)
+        if match:
+            _format_label(paragraph, match.group(1), match.group(2))
+        elif NOTE_RE.match(text):
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            paragraph.paragraph_format.left_indent = Pt(0)
+            paragraph.paragraph_format.first_line_indent = Pt(9 * 2)
+            for run in paragraph.runs:
+                _font(run, "FangSong", 9)
         elif SOURCE_RE.match(text):
             paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
             paragraph.paragraph_format.first_line_indent = Pt(0)
+            paragraph.paragraph_format.left_indent = Pt(0)
             for run in paragraph.runs:
                 _font(run, "FangSong", 10.5)
     document.save(target)
 
 
-def _format_material_label(paragraph: Any, label: str, body: str) -> None:
+def _format_label(paragraph: Any, label: str, body: str) -> None:
     for run in list(paragraph.runs):
         paragraph._p.remove(run._r)
     label_run = paragraph.add_run(label)

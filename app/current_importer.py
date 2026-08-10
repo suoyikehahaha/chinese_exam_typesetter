@@ -7,9 +7,9 @@ import re
 import tempfile
 from typing import Any
 
-from .flexible_importers_v12 import import_exam as import_exam_legacy
+from .flexible_importers import import_exam as import_exam_legacy
 from .models.identity import ensure_block_ids
-from .office_bridge_v01 import convert_doc_to_docx
+from .office_bridge import convert_doc_to_docx
 
 
 _AUTHOR_RE = re.compile(r"^[\u3400-\u9fff·、，,\s]{2,30}$")

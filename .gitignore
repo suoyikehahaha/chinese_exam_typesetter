@@ -2,7 +2,12 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.ruff_cache/
 .mypy_cache/
+.pyright/
+.coverage
+coverage.xml
+htmlcov/
 .venv/
 venv/
 
@@ -13,12 +18,24 @@ outputs/
 temp/
 tmp/
 *.pdf
-/output/
-/outputs/
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*.orig
+*.pid
+*.zip
+*.7z
+*.rar
+*.tmp.txt
+*.tmp.md
 
 # Windows build products and release binaries
 build/
 dist/
+release/
 release-v*/
 *.spec.bak
 
@@ -28,3 +45,4 @@ settings.json
 .idea/
 Thumbs.db
 Desktop.ini
+.DS_Store

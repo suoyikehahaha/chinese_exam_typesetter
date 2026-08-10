@@ -1,6 +1,6 @@
 [project]
 name = "chinese-exam-typesetter"
-version = "0.4.5"
+version = "0.1.0"
 description = "高中语文试卷结构化排版与 DOCX 导出"
 requires-python = ">=3.11"
 dependencies = [

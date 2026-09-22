@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
+import re
 from typing import Any
 
 from .answer_overrides import apply_answer_overrides
@@ -17,6 +18,7 @@ from .chinese_typography import enable_chinese_typography
 from .config import load_layout
 from .exam_context_formatting import apply_exam_context_formatting
 from .exam_format_rules import apply_exam_format_rules
+from .exporters.pdf_exporter import PdfExporter
 from .header_extras import apply_header_extras
 from .header_normalization import apply_header_normalization
 from .inline_formatting import apply_inline_formats
@@ -24,7 +26,7 @@ from .models import ExamDocument
 from .models.identity import ensure_block_ids
 from .native_docx_objects import restore_native_objects
 from .page_layout import adjusted_layout
-from .page_target import spacing_scale_for_target
+from .page_target import get_target_pages, spacing_scale_for_target
 from .pagination import apply_pagination_guards
 from .paragraph_formatting import apply_paragraph_formats
 from .renderers import DocxRenderer
@@ -102,32 +104,69 @@ def build_documents(
 ) -> tuple[Path | None, None, str]:
     """Build DOCX with target-page spacing, page overrides and run protection."""
 
-    adjusted_exam = deepcopy(raw_exam)
-    _adjust_inline_spacing(adjusted_exam, spacing_scale_for_target(adjusted_exam))
     output = Path(output_dir)
     work = Path(temporary_dir) if temporary_dir else output
     work.mkdir(parents=True, exist_ok=True)
     target_layout = work / "layout-targeted.yaml"
-    target_layout.write_text(
-        _dump_yaml(adjusted_layout(load_layout(layout_path), adjusted_exam)),
-        encoding="utf-8",
+    scale = spacing_scale_for_target(raw_exam)
+    calibrate = (
+        raw_exam.get("document_kind") not in {"answer", "exam_with_answer"}
+        and "page_spacing_scale" in raw_exam.get("metadata", {})
+        and bool(raw_exam.get("metadata", {}).get("source_docx_path"))
     )
+    docx_path: Path | None = None
     try:
-        docx_path, _unused_pdf, _unused_engine = _render_documents(
-            adjusted_exam,
-            target_layout,
-            output,
-            basename,
-            template_path=template_path,
-            export_docx=export_docx,
-            export_pdf=False,
-            temporary_dir=work,
-        )
+        for _iteration in range(6 if calibrate else 1):
+            adjusted_exam = deepcopy(raw_exam)
+            adjusted_exam.setdefault("metadata", {})["page_spacing_scale"] = scale
+            _adjust_inline_spacing(adjusted_exam, scale)
+            target_layout.write_text(
+                _dump_yaml(adjusted_layout(load_layout(layout_path), adjusted_exam)),
+                encoding="utf-8",
+            )
+            docx_path, _unused_pdf, _unused_engine = _render_documents(
+                adjusted_exam,
+                target_layout,
+                output,
+                basename,
+                template_path=template_path,
+                export_docx=export_docx,
+                export_pdf=False,
+                temporary_dir=work,
+            )
+            if not calibrate or docx_path is None:
+                break
+            measured_pages = _libreoffice_page_count(docx_path, work)
+            if measured_pages is None or measured_pages == get_target_pages(raw_exam):
+                break
+            next_scale = spacing_scale_for_target(
+                raw_exam,
+                measured_pages=measured_pages,
+                current_scale=scale,
+            )
+            if abs(next_scale - scale) < 0.0001:
+                break
+            scale = next_scale
     finally:
         target_layout.unlink(missing_ok=True)
     if docx_path is not None:
         protect_inline_properties(docx_path)
     return docx_path, None, "docx-only"
+
+
+def _libreoffice_page_count(docx_path: Path, work: Path) -> int | None:
+    """Measure a temporary PDF when LibreOffice is available; never expose it."""
+
+    target = work / "page-count.pdf"
+    try:
+        PdfExporter._export_with_libreoffice(docx_path, target)
+        data = target.read_bytes()
+        count = len(re.findall(rb"/Type\s*/Page\b", data))
+        return count or None
+    except Exception:  # noqa: BLE001 - LibreOffice remains an optional helper
+        return None
+    finally:
+        target.unlink(missing_ok=True)
 
 
 def _run_exam_passes(docx_path: Path, raw_exam: dict[str, Any]) -> None:

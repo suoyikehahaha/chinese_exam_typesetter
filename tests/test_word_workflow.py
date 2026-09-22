@@ -11,7 +11,7 @@ from app.current_importer import import_exam
 from app.current_pipeline import build_documents
 from app.internal_preview_primitives import render_internal_preview
 from app.office_bridge import engine_summary
-from app.page_target import get_target_pages
+from app.page_target import get_target_pages, spacing_scale_for_target
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +32,15 @@ class WordWorkflowTests(unittest.TestCase):
             result = render_internal_preview(raw, ROOT / "templates" / "layout.yaml", folder)
             self.assertEqual(result.engine if hasattr(result, "engine") else "internal", "internal")
             self.assertGreaterEqual(result.actual_pages, 1)
+
+    def test_page_target_uses_measured_feedback_in_small_steps(self) -> None:
+        raw = {"metadata": {"target_pages": 8}}
+        self.assertEqual(spacing_scale_for_target(raw), 1.0)
+        self.assertEqual(spacing_scale_for_target(raw, measured_pages=10), 0.94)
+        self.assertEqual(spacing_scale_for_target(raw, measured_pages=6), 1.06)
+
+        raw["metadata"]["page_spacing_scale"] = 1.12
+        self.assertEqual(spacing_scale_for_target(raw), 1.12)
 
     def test_build_ignores_legacy_pdf_flag(self) -> None:
         raw = json.loads((ROOT / "samples" / "exam.json").read_text(encoding="utf-8"))

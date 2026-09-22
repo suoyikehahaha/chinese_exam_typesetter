@@ -16,7 +16,8 @@ from typing import Any, Iterable
 from PIL import Image, ImageDraw, ImageFont
 
 from .config import load_layout
-from .page_target import adjusted_layout, get_target_pages
+from .page_layout import adjusted_layout
+from .page_target import get_target_pages
 
 
 _FONT_FILES = {

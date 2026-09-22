@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from copy import deepcopy
 from pathlib import Path
 import shutil
 import tempfile
@@ -11,6 +12,7 @@ from threading import Event, Lock
 from typing import Any, Callable
 
 from .internal_preview import render_internal_preview
+from .page_target import get_target_pages, spacing_scale_for_target
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +23,7 @@ class PreviewResult:
     locators: dict[int, tuple[int, float]]
     target_pages: int
     actual_pages: int
+    spacing_scale: float
 
 
 class PreviewService:
@@ -55,9 +58,38 @@ class PreviewService:
         def work() -> PreviewResult:
             if cancel_event.is_set():
                 raise RuntimeError("预览任务已取消")
-            rendered = render_internal_preview(raw_exam, layout_path, task_dir / "pages")
-            if cancel_event.is_set():
-                raise RuntimeError("预览任务已取消")
+            prepared = deepcopy(raw_exam)
+            metadata = prepared.setdefault("metadata", {})
+            current_scale = spacing_scale_for_target(prepared)
+            target_pages = get_target_pages(prepared)
+            best: tuple[int, Any, float] | None = None
+            document_kind = str(prepared.get("document_kind", "exam"))
+            iterations = 1 if document_kind in {"answer", "exam_with_answer"} else 8
+            for iteration in range(iterations):
+                metadata["page_spacing_scale"] = current_scale
+                rendered = render_internal_preview(
+                    prepared,
+                    layout_path,
+                    task_dir / f"pages-{iteration}",
+                )
+                if cancel_event.is_set():
+                    raise RuntimeError("预览任务已取消")
+                distance = abs(rendered.actual_pages - target_pages)
+                if best is None or distance < best[0]:
+                    best = (distance, rendered, current_scale)
+                if distance == 0:
+                    break
+                next_scale = spacing_scale_for_target(
+                    prepared,
+                    measured_pages=rendered.actual_pages,
+                    current_scale=current_scale,
+                )
+                if abs(next_scale - current_scale) < 0.0001:
+                    break
+                current_scale = next_scale
+            if best is None:
+                raise RuntimeError("预览未生成任何页面")
+            _distance, rendered, selected_scale = best
             return PreviewResult(
                 generation,
                 rendered.pages,
@@ -65,6 +97,7 @@ class PreviewService:
                 rendered.locators,
                 rendered.target_pages,
                 rendered.actual_pages,
+                selected_scale,
             )
 
         future = self._executor.submit(work)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .layout_presets import apply_layout_preset
 from .page_target import adjusted_layout as adjusted_layout_base
 
 
@@ -18,7 +19,7 @@ PAGE_KEYS = (
 def adjusted_layout(layout: dict[str, Any], raw_exam: dict[str, Any]) -> dict[str, Any]:
     """Apply safe user page overrides after target-page rhythm adjustment."""
 
-    result = adjusted_layout_base(layout, raw_exam)
+    result = adjusted_layout_base(apply_layout_preset(layout, raw_exam), raw_exam)
     overrides = raw_exam.get("metadata", {}).get("page_overrides", {})
     page = result.setdefault("page", {})
     for key in PAGE_KEYS:

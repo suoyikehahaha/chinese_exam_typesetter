@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from docx import Document
+from docx.image.exceptions import UnrecognizedImageError
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
+from docx.opc.part import Part
 from docx.oxml.ns import qn
 
 
@@ -70,8 +73,28 @@ def _remap_image_relationships(element: Any, source_part: Any, target_part: Any)
         if not old_id or old_id not in source_part.related_parts:
             continue
         image_part = source_part.related_parts[old_id]
-        new_id, _ = target_part.get_or_add_image(BytesIO(image_part.blob))
+        try:
+            new_id, _ = target_part.get_or_add_image(BytesIO(image_part.blob))
+        except UnrecognizedImageError:
+            new_id = _copy_opaque_image_part(image_part, target_part)
         blip.set(qn("r:embed"), new_id)
+
+
+def _copy_opaque_image_part(source_image_part: Any, target_part: Any) -> str:
+    """Copy an Office-supported image without asking python-docx to decode it."""
+
+    source_name = str(source_image_part.partname)
+    suffix = Path(source_name).suffix.lower() or ".bin"
+    partname = target_part.package.next_partname(
+        f"/word/media/image%d{suffix}"
+    )
+    copied = Part(
+        partname,
+        str(source_image_part.content_type),
+        bytes(source_image_part.blob),
+        target_part.package,
+    )
+    return target_part.relate_to(copied, RT.IMAGE)
 
 
 def _find_paragraph(document: Any, text: str) -> Any | None:

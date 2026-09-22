@@ -9,6 +9,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 
 from app.answer_typesetting import (
+    find_answer_start,
     parse_answer_docx,
     render_answer_docx,
     standalone_answer_model,
@@ -17,6 +18,41 @@ from app.flexible_importers import _trim_answer_from_exam, import_exam
 
 
 class AnswerTypesettingTests(unittest.TestCase):
+    def test_scoring_reference_and_appendix_analysis_are_separated(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "combined.docx"
+            document = Document()
+            document.add_paragraph("语文试题")
+            document.add_paragraph("23．阅读材料，根据要求写作。（60分）")
+            document.add_paragraph("语文试题评分参考")
+            document.add_paragraph("一、阅读（72分）")
+            document.add_paragraph("1．A（3分）")
+            document.add_paragraph("评分参考：符合题意。")
+            document.add_paragraph("附  录  试题精解")
+            document.add_paragraph("第1题  解析")
+            document.add_paragraph("试题分析：")
+            document.add_paragraph("本题考查信息筛选能力。")
+            document.save(path)
+
+            start = find_answer_start(path)
+            self.assertEqual(start, 2)
+            answer = parse_answer_docx(path, start_paragraph=start)
+            sections = [
+                block["text"]
+                for block in answer["blocks"]
+                if block.get("type") == "answer_section"
+            ]
+            self.assertIn("附  录  试题精解", sections)
+            analysis = next(
+                block
+                for block in answer["blocks"]
+                if block.get("type") == "answer_question"
+                and block.get("header") == "第1题  解析"
+            )
+            self.assertEqual(
+                [entry["role"] for entry in analysis["paragraphs"]],
+                ["analysis_label", "analysis_body"],
+            )
     def test_standalone_answer_is_semantic_and_keeps_table(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "answer.docx"
@@ -113,7 +149,9 @@ class AnswerTypesettingTests(unittest.TestCase):
                         "composition_prompt": ["以上材料引发了怎样的思考？"],
                         "composition_requirements": ["要求：不少于800字。"],
                     },
-                }
+                },
+                {"type": "material", "paragraphs": ["语文试题评分参考"]},
+                {"type": "material", "paragraphs": ["答案区不应保留"]},
             ]
         }
         _trim_answer_from_exam(raw)
@@ -127,6 +165,7 @@ class AnswerTypesettingTests(unittest.TestCase):
             question["composition_requirements"],
             ["要求：不少于800字。"],
         )
+        self.assertEqual(len(raw["blocks"]), 1)
 
 
 if __name__ == "__main__":

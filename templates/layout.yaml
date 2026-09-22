@@ -1,10 +1,10 @@
 page:
   width_mm: 210
   height_mm: 297
-  margin_top_mm: 20
-  margin_bottom_mm: 18
-  margin_left_mm: 22
-  margin_right_mm: 18
+  margin_top_mm: 25.4
+  margin_bottom_mm: 25.4
+  margin_left_mm: 31.75
+  margin_right_mm: 31.75
   header_distance_mm: 10
   footer_distance_mm: 10
 
@@ -45,7 +45,7 @@ styles:
     first_line_indent_chars: 2
   section_title:
     font: SimHei
-    size_pt: 12
+    size_pt: 10.5
     bold: false
     keep_with_next: true
     space_before_pt: 4
@@ -73,11 +73,11 @@ styles:
     size_pt: 10.5
     first_line_indent_chars: 2
   material_note:
-    font: FangSong
-    size_pt: 9
+    font: SimSun
+    size_pt: 10.5
     first_line_indent_chars: 2
   material_source:
-    font: FangSong
+    font: SimSun
     size_pt: 10.5
     alignment: right
   objective_stem:

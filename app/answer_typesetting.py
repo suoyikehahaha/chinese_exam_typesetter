@@ -20,7 +20,14 @@ from .native_docx_objects import _remap_image_relationships
 
 ANSWER_MARKER_RE = re.compile(
     r"^\s*(?:参考答案|答案与解析|参考答案与评分建议|"
-    r"语文试题参考答案及评分建议|试题答案)\s*[：:]?\s*$"
+    r"语文试题参考答案及评分建议|语文试题评分参考|"
+    r"试题答案|试题解析|试题精解)\s*[：:]?\s*$"
+)
+APPENDIX_RE = re.compile(
+    r"^\s*附\s*录(?:\s*[：:]?\s*(?:试题解析|试题精解))?\s*$"
+)
+ANALYSIS_QUESTION_RE = re.compile(
+    r"^\s*第\s*(?P<number>\d{1,2})\s*题\s*(?:解析|精解)\s*$"
 )
 MAJOR_SECTION_RE = re.compile(r"^\s*[一二三四五六七八九十]+、.+")
 SUBSECTION_RE = re.compile(
@@ -54,7 +61,10 @@ def is_standalone_answer_docx(path: str | Path) -> bool:
         if paragraph.text.strip()
     ]
     return any(
-        "参考答案" in text or "评分建议" in text or "答案与解析" in text
+        "参考答案" in text
+        or "评分建议" in text
+        or "评分参考" in text
+        or "答案与解析" in text
         for text in opening[:5]
     )
 
@@ -123,7 +133,13 @@ def parse_answer_docx(
 
             subsection = SUBSECTION_RE.fullmatch(text)
             question = QUESTION_RE.fullmatch(text)
-            if MAJOR_SECTION_RE.fullmatch(text):
+            analysis_question = ANALYSIS_QUESTION_RE.fullmatch(text)
+            if APPENDIX_RE.fullmatch(text):
+                flush()
+                blocks.append({"type": "answer_section", "text": text})
+                state = "analysis"
+                question_number = None
+            elif MAJOR_SECTION_RE.fullmatch(text):
                 flush()
                 blocks.append({"type": "answer_section", "text": text})
                 state = "answer"
@@ -149,6 +165,16 @@ def parse_answer_docx(
                     "paragraphs": [],
                 }
                 state = "composition" if question_number == 23 else "answer"
+            elif analysis_question:
+                flush()
+                question_number = int(analysis_question.group("number"))
+                current = {
+                    "type": "answer_question",
+                    "number": question_number,
+                    "header": text,
+                    "paragraphs": [],
+                }
+                state = "analysis"
             else:
                 if current is None:
                     current = {
@@ -330,6 +356,10 @@ def _answer_role(
     state: str,
     question_number: int | None,
 ) -> tuple[str, str]:
+    if text.startswith("试题分析"):
+        return "analysis_label", "analysis"
+    if state == "analysis":
+        return "analysis_body", state
     if text.startswith("评分参考"):
         return "scoring_label", "scoring"
     if text.startswith("答案示例"):
@@ -365,6 +395,8 @@ def _render_answer_paragraph(document: Any, entry: dict[str, Any]) -> None:
         "translation_label": ("SimHei", 10.5, False),
         "translation_body": ("SimSun", 10.5, False),
         "composition": ("SimSun", 10.5, False),
+        "analysis_label": ("SimHei", 10.5, False),
+        "analysis_body": ("SimSun", 10.5, False),
     }.get(role, ("KaiTi", 10.5, False))
     paragraph = _new_paragraph(document, 21, "left", 0, 0, Pt(17))
     prefix_end = 0
@@ -527,9 +559,14 @@ def _looks_like_title(text: str, paragraph: Any, count: int) -> bool:
         return False
     if count == 0:
         return paragraph.alignment == WD_ALIGN_PARAGRAPH.CENTER or (
-            "参考答案" not in text and "评分建议" not in text
+            "参考答案" not in text and "评分建议" not in text and "评分参考" not in text
         )
-    return "参考答案" in text or "评分建议" in text or "答案与解析" in text
+    return (
+        "参考答案" in text
+        or "评分建议" in text
+        or "评分参考" in text
+        or "答案与解析" in text
+    )
 
 
 def _paragraph_index_by_element(document: Any, element: Any) -> int | None:

@@ -15,7 +15,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .config import load_layout
 from .internal_preview_primitives import _font, _wrap_text
-from .page_target import adjusted_layout, get_target_pages
+from .page_layout import adjusted_layout
+from .page_target import get_target_pages
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +31,10 @@ _MATERIAL_LABEL_RE = re.compile(
     r"^\s*材料(?:[一二三四五六七八九十百]+|\d+)\s*[：:]?\s*$"
 )
 _NATIVE_DRAWING_RE = re.compile(r"^\[\[NATIVE_DRAWING:\d+\]\]$")
+# Word-compatible CJK line boxes include additional ascent/descent leading that
+# Pillow's glyph-size metric omits. The factor is verified against the bundled
+# national and Guangzhou reference documents.
+_WORD_LINE_BOX_FACTOR = 1.14
 
 
 @dataclass
@@ -299,7 +304,7 @@ def render_internal_preview(
         semantic_bold = bool(spec.get("bold", False))
         font = _font(font_name, size_pt, semantic_bold)
         line_spacing = float(spec.get("line_spacing", layout.get("defaults", {}).get("body_line_spacing", 1.25)))
-        line_height = max(14, int(font.size * line_spacing + 3))
+        line_height = max(14, int((font.size * line_spacing + 3) * _WORD_LINE_BOX_FACTOR))
         indent = float(spec.get("first_line_indent_chars", 0) if indent_chars is None else indent_chars)
         indent_px = int(size_pt * indent * 1.2)
         alignment = align or str(spec.get("alignment", "left"))

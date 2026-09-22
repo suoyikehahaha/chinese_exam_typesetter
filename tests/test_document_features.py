@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import tempfile
 import unittest
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from docx import Document
 from docx.oxml.ns import qn
@@ -173,6 +174,63 @@ class DocumentFeatureTests(unittest.TestCase):
             self.assertEqual(len(result.tables), 1)
             self.assertEqual(result.tables[0].cell(1, 1).text, "丁")
             self.assertTrue(result.paragraphs[0]._p.xpath(".//w:drawing"))
+
+    def test_unsupported_office_image_is_copied_without_decoding(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            image_path = root / "pixel.png"
+            Image.new("RGB", (40, 30), "red").save(image_path)
+            source_path = root / "source.docx"
+            source = Document()
+            paragraph = source.add_paragraph("试卷标题")
+            paragraph.add_run().add_picture(str(image_path))
+            source.save(source_path)
+
+            opaque_blob = b"\x01\x00\x00\x00opaque-emf-fixture"
+            rewritten = root / "rewritten.docx"
+            with ZipFile(source_path) as source_zip, ZipFile(
+                rewritten, "w", ZIP_DEFLATED
+            ) as target_zip:
+                for item in source_zip.infolist():
+                    data = source_zip.read(item.filename)
+                    name = item.filename
+                    if name == "word/media/image1.png":
+                        name = "word/media/image1.emf"
+                        data = opaque_blob
+                    elif name == "word/_rels/document.xml.rels":
+                        data = data.replace(b"media/image1.png", b"media/image1.emf")
+                    elif name == "[Content_Types].xml":
+                        data = data.replace(
+                            b'<Default Extension="png" ContentType="image/png"/>',
+                            b'<Default Extension="emf" ContentType="image/x-emf"/>',
+                        )
+                    target_zip.writestr(name, data)
+            rewritten.replace(source_path)
+
+            target_path = root / "target.docx"
+            target = Document()
+            target.add_paragraph("试卷标题")
+            target.save(target_path)
+            raw = {
+                "metadata": {
+                    "source_docx_path": str(source_path),
+                    "native_objects": [
+                        {
+                            "kind": "drawing",
+                            "source_paragraph_index": 0,
+                            "target_text": "试卷标题",
+                        }
+                    ],
+                }
+            }
+
+            restore_native_objects(target_path, raw)
+
+            with ZipFile(target_path) as package:
+                media = [name for name in package.namelist() if name.endswith(".emf")]
+                self.assertEqual(len(media), 1)
+                self.assertEqual(package.read(media[0]), opaque_blob)
+            self.assertTrue(Document(target_path).paragraphs[0]._p.xpath(".//w:drawing"))
 
 
 if __name__ == "__main__":

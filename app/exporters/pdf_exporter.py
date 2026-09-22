@@ -54,6 +54,7 @@ class PdfExporter:
             text=True,
             timeout=90,
             check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if completed.returncode != 0 or not target.exists():
             message = completed.stderr.strip() or completed.stdout.strip() or "Word COM 未生成 PDF"
@@ -70,12 +71,27 @@ class PdfExporter:
         if executable is None:
             raise PdfExportError("未找到 soffice")
         with tempfile.TemporaryDirectory(prefix="exam_pdf_") as temp_dir:
+            profile = Path(temp_dir) / "profile"
             completed = subprocess.run(
-                [executable, "--headless", "--convert-to", "pdf", "--outdir", temp_dir, str(source)],
+                [
+                    executable,
+                    f"-env:UserInstallation={profile.resolve().as_uri()}",
+                    "--headless",
+                    "--nologo",
+                    "--nodefault",
+                    "--nolockcheck",
+                    "--norestore",
+                    "--convert-to",
+                    "pdf",
+                    "--outdir",
+                    temp_dir,
+                    str(source),
+                ],
                 capture_output=True,
                 text=True,
                 timeout=90,
                 check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             converted = Path(temp_dir) / f"{source.stem}.pdf"
             if completed.returncode != 0 or not converted.exists():

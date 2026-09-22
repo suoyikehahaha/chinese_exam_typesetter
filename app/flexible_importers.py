@@ -1397,33 +1397,49 @@ def _enhance_material_titles_authors(
         if formats:
             block["paragraph_formats"] = _deduplicate_formats(formats)
 
+def _block_texts(block: dict[str, Any]) -> list[str]:
+    """Return the visible strings that can carry an answer boundary marker."""
+
+    values: list[str] = []
+    for key in ("text", "name", "meta", "header"):
+        if block.get(key):
+            values.append(str(block[key]))
+    for value in block.get("paragraphs", []):
+        values.append(str(value.get("text", "")) if isinstance(value, dict) else str(value))
+    return values
+
+
 def _trim_answer_from_exam(result: dict[str, Any]) -> None:
+    kept_blocks: list[dict[str, Any]] = []
     for block in result.get("blocks", []):
         question = block.get("question")
-        if not question or int(question.get("number", 0)) != 23:
-            continue
-        for key in (
-            "composition_material",
-            "composition_prompt",
-            "composition_requirements",
-        ):
-            kept: list[str] = []
-            for value in question.get(key, []):
-                text = str(value).strip()
-                if ANSWER_MARKER_RE.fullmatch(text):
+        marker_found = False
+        if question and int(question.get("number", 0)) == 23:
+            for key in (
+                "composition_material",
+                "composition_prompt",
+                "composition_requirements",
+            ):
+                values: list[str] = []
+                for value in question.get(key, []):
+                    text = str(value).strip()
+                    if ANSWER_MARKER_RE.fullmatch(text):
+                        marker_found = True
+                        break
+                    values.append(str(value))
+                question[key] = values
+                if marker_found:
                     break
-                kept.append(str(value))
-            question[key] = kept
-        question["composition_prompt"] = [
-            text
-            for text in question.get("composition_prompt", [])
-            if not ANSWER_MARKER_RE.fullmatch(str(text).strip())
-        ]
-        question["composition_requirements"] = [
-            text
-            for text in question.get("composition_requirements", [])
-            if not ANSWER_MARKER_RE.fullmatch(str(text).strip())
-        ]
+            kept_blocks.append(block)
+            if marker_found:
+                break
+            continue
+
+        texts = _block_texts(block)
+        if any(ANSWER_MARKER_RE.fullmatch(str(text).strip()) for text in texts):
+            break
+        kept_blocks.append(block)
+    result["blocks"] = kept_blocks
 
 def _is_author(text: str) -> bool:
     value = text.strip()
@@ -1775,6 +1791,15 @@ def _parse_docx_payload(source: Path, original: Path) -> dict[str, Any]:
     metadata = result.setdefault("metadata", {})
     metadata["source_docx_path"] = str(original.resolve())
     metadata["native_objects"] = native_objects
+    if document.sections:
+        section = document.sections[0]
+        metadata["source_page"] = {
+            "margin_top_mm": round(float(section.top_margin.mm), 2),
+            "margin_bottom_mm": round(float(section.bottom_margin.mm), 2),
+            "margin_left_mm": round(float(section.left_margin.mm), 2),
+            "margin_right_mm": round(float(section.right_margin.mm), 2),
+        }
+    metadata.setdefault("layout_preset", "national")
     return result
 
 

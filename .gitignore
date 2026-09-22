@@ -41,6 +41,7 @@ release-v*/
 
 # Local settings and editor files
 settings.json
+.codex-remote-attachments/
 .vscode/
 .idea/
 Thumbs.db

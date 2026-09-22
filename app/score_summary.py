@@ -85,6 +85,8 @@ def question_leaf_score(question: dict[str, Any]) -> Decimal | None:
 def calculate_score_summary(raw_exam: dict[str, Any]) -> ScoreSummary:
     """Calculate question totals and top-level section subtotals."""
 
+    if raw_exam.get("document_kind") == "answer":
+        return ScoreSummary(Decimal("0"), Decimal("0"), (), ())
     sections: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
     missing: list[str] = []
@@ -106,6 +108,8 @@ def calculate_score_summary(raw_exam: dict[str, Any]) -> ScoreSummary:
             continue
         question = block.get("question", {})
         if not isinstance(question, dict):
+            continue
+        if not question.get("counts_toward_total", True):
             continue
         if current is None:
             current = {
@@ -134,7 +138,11 @@ def calculate_score_summary(raw_exam: dict[str, Any]) -> ScoreSummary:
         )
         for item in sections
     )
-    return ScoreSummary(total, TARGET_SCORE, tuple(missing), result_sections)
+    metadata = raw_exam.get("metadata", {})
+    target = parse_score(metadata.get("total_score")) or TARGET_SCORE
+    if metadata.get("document_scope") == "practice" and not metadata.get("declared_total_score"):
+        target = total
+    return ScoreSummary(total, target, tuple(missing), result_sections)
 
 
 def format_score(value: Decimal) -> str:

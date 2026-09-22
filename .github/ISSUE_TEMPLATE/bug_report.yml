@@ -1,0 +1,38 @@
+name: 排版或运行问题
+description: 报告可复现的导入、预览、导出或运行问题
+title: "[问题] "
+body:
+  - type: markdown
+    attributes:
+      value: 请勿上传学生姓名、成绩、账号信息或未获授权公开的试题。优先提供脱敏截图或自行构造的最小样例。
+  - type: input
+    id: version
+    attributes:
+      label: 软件版本与系统
+      placeholder: 例如 v0.1.4，Windows 11 64位
+    validations:
+      required: true
+  - type: dropdown
+    id: document
+    attributes:
+      label: 文档类型
+      options:
+        - 整卷试题
+        - 局部训练或板块组合
+        - 独立答案
+        - 试题附答案
+        - 与文档无关的运行问题
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤、实际结果与预期结果
+      description: 说明发生在导入、预览或导出阶段，标明相关题号或页面；如有提示，请提供完整文字。
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 补充信息
+      description: 输入是DOCX还是DOC？是否安装Word、WPS或LibreOffice？是否出现缺失字体或替代提示？

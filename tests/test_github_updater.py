@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import unittest
-from unittest.mock import patch
+import queue
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from app.github_updater import (
     GITHUB_API,
@@ -28,6 +30,52 @@ class _Response:
 
 
 class GitHubUpdaterTests(unittest.TestCase):
+    def _desktop(self, kind, payload, automatic=True):
+        from desktop_app import CurrentDesktopApp
+        app = SimpleNamespace(
+            _update_messages=queue.Queue(), _update_in_progress=True,
+            _update_automatic=automatic, status_var=Mock(), busy_bar=Mock(),
+            after=Mock(), _poll_update_messages=Mock(), _download_update=Mock(),
+        )
+        app._update_messages.put((kind, payload))
+        return app, CurrentDesktopApp
+
+    def test_automatic_latest_check_is_quiet(self):
+        app, cls = self._desktop('checked', SimpleNamespace(newer=False))
+        with patch('desktop_app.messagebox.showinfo') as show:
+            cls._poll_update_messages(app)
+        show.assert_not_called()
+        app.busy_bar.stop.assert_not_called()
+        self.assertFalse(app._update_in_progress)
+
+    def test_automatic_failure_preserves_ui_and_reports_retry(self):
+        app, cls = self._desktop('update_error', 'offline')
+        with patch('desktop_app.messagebox.showerror') as show:
+            cls._poll_update_messages(app)
+        show.assert_not_called()
+        self.assertIn('重试', app.status_var.set.call_args.args[0])
+        self.assertFalse(app._update_in_progress)
+
+    def test_new_release_requires_download_confirmation(self):
+        info = SimpleNamespace(newer=True, version='0.2.0', name='Release', asset_name='test.exe', asset_size=1024)
+        app, cls = self._desktop('checked', info)
+        with patch('desktop_app.messagebox.askyesno', return_value=False) as ask:
+            cls._poll_update_messages(app)
+        ask.assert_called_once()
+        app._download_update.assert_not_called()
+
+    def test_duplicate_checks_do_not_start_workers(self):
+        app, cls = self._desktop('checked', None)
+        with patch('desktop_app.threading.Thread') as thread:
+            cls.check_for_updates(app)
+        thread.assert_not_called()
+
+    def test_manual_latest_check_shows_result(self):
+        app, cls = self._desktop('checked', SimpleNamespace(newer=False), automatic=False)
+        with patch('desktop_app.messagebox.showinfo') as show:
+            cls._poll_update_messages(app)
+        show.assert_called_once()
+
     def test_official_repository_is_fixed(self) -> None:
         self.assertEqual(
             GITHUB_REPOSITORY,

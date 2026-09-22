@@ -21,6 +21,7 @@ class FormattingRuleTests(unittest.TestCase):
                     "type": "question",
                     "question": {
                         "number": 10,
+                        "stem": "文中画波浪线部分有三处需要断句。",
                         "embedded_segments": [
                             [{"text": "甲A乙B丙C丁D戊E己F庚G辛H壬", "role": "body"}]
                         ],

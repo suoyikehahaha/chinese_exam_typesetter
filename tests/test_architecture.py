@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+import tomllib
 
 from app.current_importer import import_exam as current_import_exam
 from app.models.identity import ensure_block_ids
@@ -12,7 +14,10 @@ from app.version import APP_VERSION
 
 class RuntimeArchitectureTests(unittest.TestCase):
     def test_version_matches_current_release(self) -> None:
-        self.assertEqual(APP_VERSION, "0.1.0")
+        self.assertRegex(APP_VERSION, r"^\d+\.\d+\.\d+$")
+        root = Path(__file__).resolve().parents[1]
+        project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertEqual(project["project"]["version"], APP_VERSION)
 
     def test_block_ids_are_stable_and_unique(self) -> None:
         raw = {"blocks": [{"type": "instruction"}, {"type": "question", "question": {}}]}

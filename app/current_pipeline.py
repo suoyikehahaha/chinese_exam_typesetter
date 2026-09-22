@@ -110,6 +110,8 @@ def build_documents(
     target_layout = work / "layout-targeted.yaml"
     scale = spacing_scale_for_target(raw_exam)
     calibrate = (
+        get_target_pages(raw_exam) > 0
+        and
         raw_exam.get("document_kind") not in {"answer", "exam_with_answer"}
         and "page_spacing_scale" in raw_exam.get("metadata", {})
         and bool(raw_exam.get("metadata", {}).get("source_docx_path"))

@@ -19,16 +19,27 @@ def _validate_base(exam: ExamDocument) -> list[ValidationIssue]:
     """返回试卷问题列表。"""
 
     issues: list[ValidationIssue] = []
+    if exam.document_kind == "answer":
+        return issues
     questions = [block.question for block in exam.blocks if block.type == "question" and block.question]
     numbers = [question.number for question in questions]
     expected = list(range(1, len(numbers) + 1))
-    if numbers != expected:
+    if numbers != expected and exam.metadata.document_scope != "practice":
         issues.append(
             ValidationIssue("error", "question-number-sequence", f"题号应为 {expected}，实际为 {numbers}")
         )
 
-    score_sum = sum(question.score or 0 for question in questions)
-    if abs(score_sum - exam.metadata.total_score) > 0.001:
+    score_sum = sum(question.score or 0 for question in questions if question.counts_toward_total)
+    if exam.metadata.document_scope == "practice":
+        seen = set()
+        for block in exam.blocks:
+            if block.type in {"section_title", "subsection", "instruction"}:
+                seen.clear()
+            if block.question:
+                if block.question.number in seen:
+                    issues.append(ValidationIssue("error", "duplicate-question-number", f"同一板块内题号 {block.question.number} 重复"))
+                seen.add(block.question.number)
+    if (exam.metadata.document_scope != "practice" or exam.metadata.declared_total_score) and abs(score_sum - exam.metadata.total_score) > 0.001:
         issues.append(
             ValidationIssue(
                 "warning",

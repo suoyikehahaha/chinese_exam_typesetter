@@ -7,12 +7,15 @@ from copy import deepcopy
 from pathlib import Path
 import shutil
 import tempfile
+import json
+import hashlib
 from concurrent.futures import Future, ThreadPoolExecutor
 from threading import Event, Lock
 from typing import Any, Callable
 
 from .internal_preview import render_internal_preview
 from .page_target import get_target_pages, spacing_scale_for_target
+from .preview_cancellation import cancel_event as worker_cancel_event
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +27,7 @@ class PreviewResult:
     target_pages: int
     actual_pages: int
     spacing_scale: float
+    warnings: tuple[str, ...] = ()
 
 
 class PreviewService:
@@ -36,6 +40,8 @@ class PreviewService:
         self._future: Future[PreviewResult] | None = None
         self._current_dir: Path | None = None
         self._closed = False
+        self._cached_key: str | None = None
+        self._cached_result: PreviewResult | None = None
 
     def submit(
         self,
@@ -54,24 +60,47 @@ class PreviewService:
             cancel_event = self._cancel_event
             task_dir = self._root / f"generation-{generation}"
             task_dir.mkdir(parents=True, exist_ok=True)
+            previous_future = self._future
+
+        if previous_future is not None:
+            previous_future.cancel()
+        # Freeze at submission, not when a queued worker eventually starts.
+        prepared = deepcopy(raw_exam)
+        signature = deepcopy(prepared)
+        signature.setdefault("metadata", {}).pop("page_spacing_scale", None)
+        source = Path(str(signature["metadata"].get("source_docx_path", "")))
+        source_stamp = None
+        if source.is_file():
+            stat = source.stat()
+            source_stamp = (stat.st_size, stat.st_mtime_ns)
+        cache_key = hashlib.sha256((json.dumps(signature, sort_keys=True, ensure_ascii=False) + repr(source_stamp)).encode("utf-8") + Path(layout_path).read_bytes()).hexdigest()
 
         def work() -> PreviewResult:
             if cancel_event.is_set():
                 raise RuntimeError("预览任务已取消")
-            prepared = deepcopy(raw_exam)
+            cached = self._cached_result
+            if self._cached_key == cache_key and cached and all(path.is_file() for path in cached.pages):
+                pages = []
+                for index, path in enumerate(cached.pages):
+                    if cancel_event.is_set():
+                        raise RuntimeError("预览任务已取消")
+                    target = task_dir / f"page-{index + 1}.png"
+                    shutil.copy2(path, target)
+                    pages.append(target)
+                return PreviewResult(generation, tuple(pages), cached.engine, dict(cached.locators), cached.target_pages, cached.actual_pages, cached.spacing_scale, cached.warnings)
             metadata = prepared.setdefault("metadata", {})
             current_scale = spacing_scale_for_target(prepared)
             target_pages = get_target_pages(prepared)
             best: tuple[int, Any, float] | None = None
             document_kind = str(prepared.get("document_kind", "exam"))
-            iterations = 1 if document_kind in {"answer", "exam_with_answer"} else 8
+            iterations = 1 if target_pages == 0 or document_kind in {"answer", "exam_with_answer"} else 4
             for iteration in range(iterations):
                 metadata["page_spacing_scale"] = current_scale
-                rendered = render_internal_preview(
-                    prepared,
-                    layout_path,
-                    task_dir / f"pages-{iteration}",
-                )
+                token = worker_cancel_event.set(cancel_event)
+                try:
+                    rendered = render_internal_preview(prepared, layout_path, task_dir / f"pages-{iteration}")
+                finally:
+                    worker_cancel_event.reset(token)
                 if cancel_event.is_set():
                     raise RuntimeError("预览任务已取消")
                 distance = abs(rendered.actual_pages - target_pages)
@@ -98,6 +127,7 @@ class PreviewService:
                 rendered.target_pages,
                 rendered.actual_pages,
                 selected_scale,
+                getattr(rendered, "warnings", ()),
             )
 
         future = self._executor.submit(work)
@@ -114,10 +144,14 @@ class PreviewService:
                 if isinstance(result, PreviewResult) and not stale:
                     previous = self._current_dir
                     self._current_dir = task_dir
+                    self._cached_key = cache_key
+                    self._cached_result = result
                 else:
                     previous = None
             if previous is not None:
                 shutil.rmtree(previous, ignore_errors=True)
+            if stale or isinstance(result, Exception):
+                shutil.rmtree(task_dir, ignore_errors=True)
             if not stale:
                 callback(result)
 

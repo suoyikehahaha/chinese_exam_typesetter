@@ -6,7 +6,29 @@
 
 这是一个面向高中语文教师的 Windows 试卷排版工具。软件把已有 Word 试题识别为卷首、阅读模块、材料、题目、选择项、诗歌、作文和答案等结构，再按预设的高中语文试卷规范统一排版。
 
-当前正式版本为 **0.1.0**。
+当前版本为 **0.1.4**，面向 Windows 64 位系统。
+
+[下载 Windows EXE](https://github.com/suoyikehahaha/chinese_exam_typesetter/releases/latest) · [更新记录](CHANGELOG.md) · [开发与发布](docs/development.md) · [反馈问题](https://github.com/suoyikehahaha/chinese_exam_typesetter/issues/new/choose)
+
+无需安装 Python；日常处理 DOCX 不要求安装 Office 或 WPS。试题在本机处理，导入、预览与导出不上传文档内容。模板参考全国卷常见版式，不代表官方认证或对任意 Word 文档的无误转换承诺。
+
+## 适用场景
+
+| 文档类型 | 处理方式 |
+| --- | --- |
+| 整套语文试卷 | 识别卷首、材料、题目及分值，默认以8页为调节目标，显示实际预览页数 |
+| 限时训练、专题选编 | 支持多个板块组合、调整顺序、重复板块及重新编号，按内容自然分页 |
+| 独立参考答案 | 单独识别答案题号、解析和评分说明，不按整卷150分校验 |
+| 试题后附答案 | 区分题面与答案内容，按顺序生成同一份DOCX |
+
+## 0.1.4 更新重点
+
+- 修复独立答案误识别、同段连续答案未拆分及部分内容遗漏。
+- 修复卷首注意事项遗漏、默写小题跨段错序，保留相关下划线。
+- 补充题内后段分值和单题板块分值识别；明确不计分的附加题与正式总分分开。
+- 改善双诗结构识别及加粗宋体预览，延续后台导入、预览缓存和过期任务取消。
+
+本机回归测试共127项通过，另完成六份真实文档的EXE导入、预览、导出检查。真实试卷原件不随源码分发；缺少这些原件时，相应本地集成测试会跳过。完整记录见[更新记录](CHANGELOG.md)。
 
 ![软件主界面](docs/software-interface.png)
 
@@ -16,8 +38,11 @@
 - 按预设模板识别卷首、注意事项或考生须知、阅读材料、题目、选项、作文与答案。
 - 在左侧结构树中选择具体内容，修改文字、字体、字号、缩进、行距、段距和分页参数。
 - 在右侧查看 A4 分页预览，并随结构选择定位到对应内容。
-- 汇总各道末级题目的分值，实时显示与 150 分的差额。
-- 设置目标页数，默认 8 页，并在安全范围内调整段落节奏。
+- 汇总各道末级题目的分值，按卷首声明总分核对；未声明总分的局部训练仅显示已录入合计。
+- 识别独立答案和同段连续选择题答案；明确“不计入分数”的附加题保留题面分值，不计入正式总分。
+- 支持文言文、诗歌、默写等局部训练，保留原题号及分板块编号。可在整卷设置中切换“全卷 / 局部训练”。
+- 设置目标页数，全卷默认 8 页；局部训练默认 0，即按内容自然分页，不扩展为整卷。
+- 后台导入，取消过期预览，复用未改变内容的预览图片。内部预览为分页估算，最终打印分页以 Word 文档为准。
 - 保留原文表格、图片、下划线、加粗、着重号等 DOCX 原生内容。
 - 导出新的 DOCX，文件名自动在原文件名后添加“（排版）”。
 
@@ -48,7 +73,7 @@
 
 ## 软件更新
 
-菜单“帮助 → 检查更新”会直接访问本项目的 GitHub Releases。软件会自动比较版本，发现新版本后可在软件内下载 Windows EXE。用户无需填写 GitHub 地址。
+软件启动后延迟6秒在后台检查本项目的 GitHub Releases，有新版本时提示，下载和安装须经用户确认。没有新版本时不弹窗；无法联网时在状态栏说明原因，仍可正常排版。菜单“帮助 → 检查更新”可随时手动重试，“帮助 → GitHub 更新页面”可查看仓库地址和发布说明。用户无需填写 GitHub 地址。
 
 更新检查只读取公开的 Release 信息，不上传试题内容。
 
@@ -56,33 +81,42 @@
 
 请在 [GitHub Releases](https://github.com/suoyikehahaha/chinese_exam_typesetter/releases/latest) 下载最新 Windows 版本。
 
-Windows 10 和 Windows 11 可以直接运行便携版 EXE。DOCX 的读取、预览和导出不要求安装 Microsoft Office 或 WPS。导入旧版 `.doc` 时，软件会按需调用本机的 Word 或 WPS 进行转换。
+发布资产中的 `ChineseExamTypesetter_0.1.4.exe` 是便携程序，GitHub 自动生成的 “Source code” 压缩包供开发者使用，不是安装包。运行环境面向 Windows 10/11 64 位，本轮验证在 Windows 11 完成。
+
+DOCX 的读取、预览和导出不要求安装 Microsoft Office 或 WPS。导入旧版 `.doc` 时，软件会按需调用本机的 Word 或 WPS 进行转换。请安装宋体、黑体、楷体、仿宋；缺失字体或预览替代会提示核对，不建议带着字体警告直接印刷。
+
+发布页同时提供 `SHA256SUMS.txt`。可用 `Get-FileHash .\ChineseExamTypesetter_0.1.4.exe -Algorithm SHA256` 核对下载文件。遇到系统安全提示时请先核对下载来源和校验值，不要关闭系统安全防护。
 
 ## 当前范围
 
 当前版本只处理可编辑的 Word 文档，并只导出 DOCX。PDF 导入、PDF 导出、扫描件 OCR 和复杂版面重建暂未提供。
 
-内部预览用于排版检查。最终分页仍应以导出的 DOCX 在 Word 或 WPS 中打开后的结果为准。
+内部预览用于结构与分页检查，并非 Word/WPS 的原生排版引擎。8页是调节目标，不保证所有内容都能安全压缩为8页。最终分页、字体与打印效果仍应以导出的 DOCX 在 Word 或 WPS 中打开后的结果为准；正式使用前请核对题号、分值、答案、图片表格及页末断行。
 
 ## 源码运行与构建
 
-环境要求为 Python 3.11 或更高版本。
+环境要求为 Windows、64位 Python 3.11 或更高版本（含 Tkinter）。建议使用虚拟环境，不需要激活脚本。
 
 ```powershell
-python windows_launcher.py
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-runtime.txt
+.\.venv\Scripts\python.exe windows_launcher.py
 ```
 
 Windows 打包使用项目根目录中的脚本。
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\build_windows.ps1
+.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+.\build_windows.ps1 -PythonPath .\.venv\Scripts\python.exe
 ```
 
 自动测试命令如下。
 
 ```powershell
-python -m unittest discover -s tests -q
+.\.venv\Scripts\python.exe -B -m unittest discover -s tests -q
 ```
+
+打包、版本核对、发布校验和模块入口详见[开发与发布说明](docs/development.md)。
 
 ## 使用许可
 

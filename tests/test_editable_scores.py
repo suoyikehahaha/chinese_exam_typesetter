@@ -63,7 +63,8 @@ class EditableScoresTests(unittest.TestCase):
     def test_current_entry_imports_without_starting_tk(self) -> None:
         import desktop_app
 
-        self.assertEqual(desktop_app.APP_VERSION, "0.1.0")
+        from app.version import APP_VERSION
+        self.assertEqual(desktop_app.APP_VERSION, APP_VERSION)
 
     def test_pagination_signature_skips_rebuild(self) -> None:
         from app.editable_a4_canvas import EditableA4Canvas

@@ -12,6 +12,7 @@ from docx.image.exceptions import UnrecognizedImageError
 from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.opc.part import Part
 from docx.oxml.ns import qn
+from .paragraph_identity import paragraph_identity
 
 
 def restore_native_objects(docx_path: str | Path, raw_exam: dict[str, Any]) -> None:
@@ -99,6 +100,6 @@ def _copy_opaque_image_part(source_image_part: Any, target_part: Any) -> str:
 
 def _find_paragraph(document: Any, text: str) -> Any | None:
     for paragraph in document.paragraphs:
-        if paragraph.text.strip() == text.strip():
+        if paragraph_identity(paragraph.text) == paragraph_identity(text):
             return paragraph
     return None

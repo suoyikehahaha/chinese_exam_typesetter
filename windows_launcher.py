@@ -70,8 +70,14 @@ def _run_import_test(module: object, source: Path, output: Path) -> int:
             encoding="utf-8",
         )
         return 1
+    from app.score_summary import calculate_score_summary
+    summary = calculate_score_summary(data)
     result = {
         "status": "IMPORT_OK",
+        "document_kind": data.get("document_kind", "exam"),
+        "answer_numbers": [block.get("number") for block in data.get("blocks", []) if block.get("type") == "answer_question"],
+        "score_total": str(summary.total),
+        "missing_scores": list(summary.missing_questions),
         "source": source.name,
         "blocks": len(data.get("blocks", [])),
         "questions": _question_numbers(data),

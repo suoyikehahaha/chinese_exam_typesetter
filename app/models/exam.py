@@ -31,6 +31,7 @@ class Question:
     kind: QuestionKind
     stem: str
     score: float | None = None
+    counts_toward_total: bool = True
     options: list[str] = field(default_factory=list)
     option_layout: str = "vertical"
     embedded_segments: list[list[InlineSegment]] = field(default_factory=list)
@@ -51,6 +52,7 @@ class Question:
             kind=data["kind"],
             stem=str(data["stem"]),
             score=float(data["score"]) if data.get("score") is not None else None,
+            counts_toward_total=bool(data.get("counts_toward_total", True)),
             options=[str(item) for item in data.get("options", [])],
             option_layout=str(data.get("option_layout", "vertical")),
             embedded_segments=embedded,
@@ -103,6 +105,9 @@ class ExamMetadata:
     meta_text: str
     notices: list[str] = field(default_factory=list)
     total_score: float = 150
+    document_scope: str = "full_exam"
+    declared_total_score: bool = True
+    header_lines: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ExamMetadata":
@@ -112,6 +117,9 @@ class ExamMetadata:
             meta_text=str(data["meta_text"]),
             notices=[str(item) for item in data.get("notices", [])],
             total_score=float(data.get("total_score", 150)),
+            document_scope=str(data.get("document_scope", "full_exam")),
+            declared_total_score=bool(data.get("declared_total_score", True)),
+            header_lines=[str(item) for item in data.get("header_lines", [])],
         )
 
 
@@ -121,12 +129,14 @@ class ExamDocument:
 
     metadata: ExamMetadata
     blocks: list[Block]
+    document_kind: str = "exam"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ExamDocument":
         return cls(
             metadata=ExamMetadata.from_dict(data["metadata"]),
             blocks=[Block.from_dict(item) for item in data["blocks"]],
+            document_kind=str(data.get("document_kind", "exam")),
         )
 
 

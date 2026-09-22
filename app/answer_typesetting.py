@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 from typing import Any, Iterable
 
-from docx import Document
+from .document_read_session import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -48,6 +48,43 @@ LABELED_ANSWER_RE = re.compile(
 EXAMPLE_LABEL_RE = re.compile(r"^\s*示例[一二三四五六七八九十\d]+\s*[：:]")
 
 
+def _answer_heading(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text)
+    return bool(re.fullmatch(r"(?:语文(?:科|试题)?[：:]?)?(?:参考)?答案(?:与解析|及评分建议)?[：:]?", compact)) or any(
+        cue in compact for cue in ("参考答案", "评分建议", "评分参考", "答案与解析")
+    )
+
+
+def _answer_children(document: Any):
+    """Split joined consecutive choice answers without changing the package."""
+    for child in document.element.body.iterchildren():
+        if child.tag != qn("w:p"):
+            yield child
+            continue
+        paragraph = Paragraph(child, document)
+        text = paragraph.text
+        first = QUESTION_RE.match(text)
+        cuts = [0]
+        if first:
+            expected = int(first.group("number")) + 1
+            for match in re.finditer(r"(?<=[。；;！？!?])\s*(\d{1,2})[.．]\s*(?=[A-D]\s*[。．.、【（(])", text):
+                if int(match.group(1)) == expected:
+                    cuts.append(match.start(1))
+                    expected += 1
+        if len(cuts) == 1:
+            yield child
+            continue
+        for start, end in zip(cuts, cuts[1:] + [len(text)]):
+            copied = deepcopy(child)
+            cursor = 0
+            for run in Paragraph(copied, document).runs:
+                value = run.text
+                left, right = max(0, start-cursor), min(len(value), end-cursor)
+                run.text = value[left:right] if right > left else ""
+                cursor += len(value)
+            yield copied
+
+
 def is_standalone_answer_docx(path: str | Path) -> bool:
     """Return whether the opening area identifies a standalone answer document."""
 
@@ -60,13 +97,7 @@ def is_standalone_answer_docx(path: str | Path) -> bool:
         for paragraph in document.paragraphs[:12]
         if paragraph.text.strip()
     ]
-    return any(
-        "参考答案" in text
-        or "评分建议" in text
-        or "评分参考" in text
-        or "答案与解析" in text
-        for text in opening[:5]
-    )
+    return any(_answer_heading(text) for text in opening[:5] if not QUESTION_RE.match(text))
 
 
 def find_answer_start(path: str | Path) -> int | None:
@@ -106,7 +137,7 @@ def parse_answer_docx(
 
     started = start_paragraph is None
     skipped_marker = False
-    for child in document.element.body.iterchildren():
+    for child in _answer_children(document):
         if child.tag == qn("w:p"):
             paragraph_counter += 1
             paragraph = Paragraph(child, document)
@@ -209,8 +240,6 @@ def parse_answer_docx(
             fallback_title or source.stem,
             "语文试题参考答案及评分建议",
         ]
-    elif len(title_lines) == 1:
-        title_lines.append("语文试题参考答案及评分建议")
 
     return {
         "title_lines": title_lines[:2],
@@ -224,16 +253,15 @@ def standalone_answer_model(answer: dict[str, Any]) -> dict[str, Any]:
     """Expose answer blocks through the existing editable workbench model."""
 
     title_lines = list(answer.get("title_lines", []))
-    while len(title_lines) < 2:
-        title_lines.append("语文试题参考答案及评分建议")
     return {
         "document_kind": "answer",
         "metadata": {
             "exam_name": title_lines[0],
-            "subject_name": title_lines[1],
+            "subject_name": title_lines[1] if len(title_lines) > 1 else "",
             "meta_text": "",
             "notices": [],
-            "total_score": 150,
+            "total_score": 0,
+            "target_pages": 0,
             "answer_title_lines": title_lines[:2],
             "answer_source_docx_path": answer.get("source_docx_path", ""),
         },
@@ -555,18 +583,15 @@ def _add_page_numbers(document: Any) -> None:
 
 
 def _looks_like_title(text: str, paragraph: Any, count: int) -> bool:
-    if count >= 2 or MAJOR_SECTION_RE.fullmatch(text):
+    if count >= 2 or MAJOR_SECTION_RE.fullmatch(text) or QUESTION_RE.match(text):
         return False
+    if _answer_heading(text):
+        return True
     if count == 0:
         return paragraph.alignment == WD_ALIGN_PARAGRAPH.CENTER or (
             "参考答案" not in text and "评分建议" not in text and "评分参考" not in text
         )
-    return (
-        "参考答案" in text
-        or "评分建议" in text
-        or "评分参考" in text
-        or "答案与解析" in text
-    )
+    return False
 
 
 def _paragraph_index_by_element(document: Any, element: Any) -> int | None:

@@ -13,17 +13,17 @@ from PIL import ImageFont
 _ALIASES = {"宋体": "SimSun", "黑体": "SimHei", "楷体": "KaiTi", "仿宋": "FangSong"}
 
 _FACE_FILES = {
-    "SimSun": ("STSONG.TTF", "simsun.ttc", "SimsunExtG.ttf"),
+    "SimSun": ("simsun.ttc", "STSONG.TTF", "SimsunExtG.ttf"),
     "SimHei": ("simhei.ttf", "msyhbd.ttc", "Dengb.ttf"),
     "KaiTi": ("simkai.ttf", "STKAITI.TTF", "STKaitiSC-Regular.ttf"),
     "FangSong": ("simfang.ttf", "STFANGSO.TTF", "STFangsong.ttf"),
 }
 
 _BOLD_FILES = {
-    "SimSun": ("STZHONGS.TTF", "msyhbd.ttc", "Dengb.ttf"),
+    "SimSun": ("simsun.ttc",),
     "SimHei": ("simhei.ttf", "msyhbd.ttc", "Dengb.ttf"),
-    "KaiTi": ("simkai.ttf", "msyhbd.ttc"),
-    "FangSong": ("simfang.ttf", "msyhbd.ttc"),
+    "KaiTi": ("simkai.ttf",),
+    "FangSong": ("simfang.ttf",),
 }
 
 _GLYPH_PROBE = "语文试卷排版中国考试"
@@ -82,13 +82,27 @@ def load_preview_font(
             continue
         masks = {bytes(font.getmask(character)) for character in _GLYPH_PROBE}
         if len(masks) >= 4:
+            font.preview_stroke_width = 1 if bold and normalized_font_family(name) != "SimHei" else 0
             return font
-    return ImageFont.load_default()
+    raise RuntimeError(f"无法加载中文字体 {name}，请安装该字体后重新预览。")
 
 
 def resolved_font_path(name: str, size_pt: float = 10.5, bold: bool = False) -> str:
     font = load_preview_font(name, size_pt, bold)
     return str(getattr(font, "path", "Pillow default font"))
+
+
+def normalized_font_family(name: str) -> str:
+    return _ALIASES.get(str(name), str(name))
+
+
+def font_substitution_notice(name: str, font) -> str:
+    normalized = _ALIASES.get(str(name), str(name))
+    expected = _FACE_FILES.get(normalized, ())
+    actual = Path(str(getattr(font, "path", ""))).name
+    if expected and actual.casefold() == expected[0].casefold():
+        return ""
+    return f"{name} → {actual or '未知字体'}"
 
 
 __all__ = ["load_preview_font", "resolved_font_path"]

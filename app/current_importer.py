@@ -82,7 +82,7 @@ def _normalize_same_line_title_authors(
             roles = ["body"] * len(paragraphs)
         block["paragraph_roles"] = roles[1:]
         formats = list(block.get("paragraph_formats", []))
-        formats.append(_role_format("author", 0, "仿宋", "居中"))
+        formats.append(_role_format("author", 1, "仿宋", "居中"))
         block["paragraph_formats"] = formats
         diagnostics.append(
             {
@@ -104,15 +104,16 @@ def _normalize_publication_notes(result: dict[str, Any]) -> None:
         if len(roles) != len(paragraphs):
             roles = ["body"] * len(paragraphs)
         formats = list(block.get("paragraph_formats", []))
+        offset = int(bool(block.get("title"))) + int(bool(block.get("author")))
         for index, text in enumerate(paragraphs):
             if _SOURCE_RE.fullmatch(text):
                 roles[index] = "source"
                 formats = [
                     item
                     for item in formats
-                    if int(item.get("target_index", -1)) != index
+                    if int(item.get("target_index", -1)) != index + offset
                 ]
-                formats.append(_role_format("source", index, "仿宋", "右对齐"))
+                formats.append(_role_format("source", index + offset, "仿宋", "右对齐"))
         block["paragraph_roles"] = roles
         if formats:
             block["paragraph_formats"] = formats
@@ -142,6 +143,8 @@ def _role_format(
 
 def _is_author(value: str) -> bool:
     text = value.strip()
+    if any(cue in text for cue in ("研究报告", "研究结论", "问题提出", "资料整理")):
+        return False
     if not _AUTHOR_RE.fullmatch(text):
         return False
     return 2 <= len(re.findall(r"[\u3400-\u9fff]", text)) <= 20

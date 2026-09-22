@@ -3,6 +3,7 @@
 
 from pathlib import Path
 import os
+import runpy
 import sys
 
 from PyInstaller.building.datastruct import Tree
@@ -10,6 +11,7 @@ from PyInstaller.utils.hooks import collect_submodules
 
 
 project_root = Path(SPECPATH).resolve()
+app_version = runpy.run_path(str(project_root / "app" / "version.py"))["APP_VERSION"]
 python_root = Path(sys.base_prefix).resolve()
 dll_root = python_root / "DLLs"
 tcl_root = python_root / "tcl"
@@ -64,7 +66,7 @@ pyz = PYZ(a.pure)
 
 exe = EXE(
     pyz, a.scripts, a.binaries, a.datas, [],
-    name="ChineseExamTypesetter_0.1.1", debug=False,
+    name=f"ChineseExamTypesetter_{app_version}", debug=False,
     bootloader_ignore_signals=False, strip=False, upx=True, upx_exclude=[],
     runtime_tmpdir=None, console=False, disable_windowed_traceback=False,
     argv_emulation=False, target_arch=None, codesign_identity=None,

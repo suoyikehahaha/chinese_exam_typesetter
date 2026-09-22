@@ -210,6 +210,8 @@ class CurrentDesktopApp(LegacyWorkbench):
             thread_name_prefix="exam-export",
         )
         self._update_messages: queue.Queue[tuple[str, object]] = queue.Queue()
+        self._update_in_progress = False
+        self._update_automatic = False
         self._preview_generation = 0
         self._export_generation = 0
         self._detail_window_width = 0
@@ -250,6 +252,7 @@ class CurrentDesktopApp(LegacyWorkbench):
         self.stem_text.bind("<ButtonRelease-1>", self._cursor_style_event, add="+")
         self.status_var.set("工作台已就绪，正在准备首次预览。")
         self.after(1300, self._release_startup_preview)
+        self.after(6000, lambda: self.check_for_updates(automatic=True))
         self._set_application_icon()
         self.bind_all("<Control-z>", self.undo_action)
         self.bind_all("<Control-y>", self.redo_action)
@@ -546,7 +549,7 @@ class CurrentDesktopApp(LegacyWorkbench):
             return f"还差 {format_score(summary.difference)} 分"
         if summary.difference < 0:
             return f"超出 {format_score(-summary.difference)} 分"
-        return "总分已达到 150 分"
+        return f"已录入合计 {format_score(summary.total)} 分"
 
     def _show_current_page(self) -> None:
         """Keep the preview status synchronized with the A4 page canvas."""
@@ -587,6 +590,8 @@ class CurrentDesktopApp(LegacyWorkbench):
         self.request_preview()
 
     def request_preview(self) -> None:
+        if getattr(self, "_export_in_progress", False) or getattr(self, "_import_in_progress", False):
+            return
         """Submit one cancellable internal-preview task for the current draft."""
 
         if getattr(self, "_startup_preview_deferred", False):
@@ -600,7 +605,7 @@ class CurrentDesktopApp(LegacyWorkbench):
         selection = self.tree.selection()
         if selection and selection[0].startswith("block-"):
             self._pending_preview_block = int(selection[0].split("-", 1)[1])
-        raw = deepcopy(self.raw_exam)
+        raw = self.raw_exam
         self.busy = True
         self.busy_bar.start(12)
         self.status_var.set("正在生成预览，请稍候…")
@@ -652,6 +657,7 @@ class CurrentDesktopApp(LegacyWorkbench):
         raw = deepcopy(self.raw_exam)
         template = self.template_path
         self._export_generation += 1
+        self._export_in_progress = True
         generation = self._export_generation
         self.busy = True
         self.busy_bar.start(12)
@@ -686,7 +692,7 @@ class CurrentDesktopApp(LegacyWorkbench):
 
     def _finish_export(self, result: Any) -> None:
         """Publish export completion on the Tk thread."""
-
+        self._export_in_progress = False
         if isinstance(result, Exception):
             self._finish_task_error(result)
             return
@@ -1095,7 +1101,7 @@ class CurrentDesktopApp(LegacyWorkbench):
         self._global_entry(parent, 0, "试卷名称", self.exam_name_var)
         self._global_entry(parent, 1, "科目名称", self.subject_name_var)
         self._global_entry(parent, 2, "试卷说明", self.exam_meta_var)
-        self._global_entry(parent, 3, "目标页数", self.target_pages_var, width=8, hint="默认 8 页")
+        self._global_entry(parent, 3, "目标页数", self.target_pages_var, width=8, hint="0 为自然分页；整卷默认 8 页")
         ttk.Label(parent, text="版式预设").grid(row=4, column=0, sticky=tk.W, pady=3)
         preset_box = ttk.Combobox(
             parent,
@@ -1128,6 +1134,19 @@ class CurrentDesktopApp(LegacyWorkbench):
         ttk.Button(buttons, text="导入 Word 母版", command=self.import_template).pack(side=tk.LEFT)
         ttk.Button(buttons, text="使用默认预设", command=self.use_default_template).pack(side=tk.LEFT, padx=(6, 0))
         parent.columnconfigure(1, weight=1)
+
+        self.document_scope_var = tk.StringVar(master=self, value="全卷")
+        ttk.Label(parent, text="文档类型").grid(row=11, column=0, sticky=tk.W, pady=5)
+        scope_box = ttk.Combobox(parent, textvariable=self.document_scope_var, values=("全卷", "局部训练"), state="readonly", width=14)
+        scope_box.grid(row=11, column=1, sticky=tk.W, padx=7)
+        scope_box.bind("<<ComboboxSelected>>", self._scope_changed)
+
+    def _scope_changed(self, _event=None) -> None:
+        practice = self.document_scope_var.get() == "局部训练"
+        self.raw_exam.setdefault("metadata", {})["document_scope"] = "practice" if practice else "full_exam"
+        self.target_pages_var.set("0" if practice else "8")
+        self._commit_global_settings(show_error=True)
+        self._refresh_score_display()
 
     def _preset_changed(self, _event: object | None = None) -> None:
         """Load the selected preset margins while preserving editable controls."""
@@ -1849,8 +1868,8 @@ class CurrentDesktopApp(LegacyWorkbench):
                 "margin_left_mm": float(self.margin_left_var.get()),
                 "margin_right_mm": float(self.margin_right_var.get()),
             }
-            if not 1 <= target_pages <= 32:
-                raise ValueError("目标页数应在 1 到 32 页之间。")
+            if not 0 <= target_pages <= 32:
+                raise ValueError("目标页数应在 0 到 32 之间，0 表示按内容自然分页。")
             if any(not 5 <= value <= 45 for value in margins.values()):
                 raise ValueError("页边距应在 5 到 45 毫米之间。")
         except ValueError as exc:
@@ -1861,7 +1880,6 @@ class CurrentDesktopApp(LegacyWorkbench):
         metadata["exam_name"] = self.exam_name_var.get().strip()
         metadata["subject_name"] = self.subject_name_var.get().strip()
         metadata["meta_text"] = self.exam_meta_var.get().strip()
-        metadata["total_score"] = float(TARGET_SCORE)
         metadata["target_pages"] = target_pages
         metadata["layout_preset"] = LAYOUT_PRESET_KEYS.get(self.layout_preset_var.get(), "national")
         metadata["page_overrides"] = margins
@@ -1884,6 +1902,8 @@ class CurrentDesktopApp(LegacyWorkbench):
             preset_key = str(metadata.get("layout_preset", "national"))
             self.layout_preset_var.set(PRESET_LABELS.get(preset_key, PRESET_LABELS["national"]))
             self.target_pages_var.set(str(metadata.get("target_pages", 8)))
+            if hasattr(self, "document_scope_var"):
+                self.document_scope_var.set("局部训练" if metadata.get("document_scope") == "practice" else "全卷")
             self.margin_top_var.set(str(overrides.get("margin_top_mm", defaults.get("margin_top_mm", page.get("margin_top_mm", 25.4)))))
             self.margin_bottom_var.set(str(overrides.get("margin_bottom_mm", defaults.get("margin_bottom_mm", page.get("margin_bottom_mm", 25.4)))))
             self.margin_left_var.set(str(overrides.get("margin_left_mm", defaults.get("margin_left_mm", page.get("margin_left_mm", 31.75)))))
@@ -1907,7 +1927,6 @@ class CurrentDesktopApp(LegacyWorkbench):
         question["kind"] = "objective" if self.kind_var.get() == "客观题" else "subjective"
         question["score"] = None if not score_text else float(parse_score(score_text) or Decimal("0"))
         question["option_layout"] = "two_column" if self.option_layout_var.get() == "两行两列" else "vertical"
-        self.raw_exam.setdefault("metadata", {})["total_score"] = float(TARGET_SCORE)
         self._refresh_score_display()
         return True
 
@@ -1941,8 +1960,17 @@ class CurrentDesktopApp(LegacyWorkbench):
     def _refresh_score_display(self, summary: ScoreSummary | None = None) -> None:
         if not hasattr(self, "score_total_label"):
             return
+        if self.raw_exam.get("document_kind") == "answer":
+            self.score_total_label.configure(text="独立答案文档", foreground="#107C10")
+            self.score_delta_label.configure(text="不作试卷总分校验", foreground="#107C10")
+            self._refresh_warning_banner(calculate_score_summary(self.raw_exam))
+            return
         state = summary or calculate_score_summary(self.raw_exam)
-        self.score_total_label.configure(text=f"当前 {format_score(state.total)} / 150 分")
+        metadata = self.raw_exam.get("metadata", {})
+        text = f"当前 {format_score(state.total)} / {format_score(state.target)} 分"
+        if metadata.get("document_scope") == "practice" and not metadata.get("declared_total_score"):
+            text = f"已录入合计 {format_score(state.total)} 分"
+        self.score_total_label.configure(text=text)
         delta = self._score_difference_text(state)
         if state.missing_questions:
             delta += f"，{len(state.missing_questions)} 题待填"
@@ -1960,7 +1988,7 @@ class CurrentDesktopApp(LegacyWorkbench):
             if summary.missing_questions:
                 warnings.append("待填写分值：" + "、".join(summary.missing_questions))
             question_count = sum(1 for block in self.raw_exam.get("blocks", []) if block.get("type") == "question")
-            if self.raw_exam.get("document_kind") != "answer" and question_count != 23:
+            if self.raw_exam.get("document_kind") != "answer" and question_count == 0:
                 warnings.append(f"当前识别 {question_count} 道题，仍可继续编辑和导出")
             diagnostics = self.raw_exam.get("diagnostics", [])
             if diagnostics:
@@ -2005,7 +2033,10 @@ class CurrentDesktopApp(LegacyWorkbench):
         elif document_kind == "answer":
             self.status_var.set(f"答案预览已更新：共 {result.actual_pages} 页")
         else:
-            self.status_var.set(f"预览已更新：实际 {result.actual_pages} 页，目标 {result.target_pages} 页")
+            target_text = f"目标 {result.target_pages} 页" if result.target_pages else "自然分页"
+            self.status_var.set(f"预览估算 {result.actual_pages} 页，{target_text}；打印分页以 Word 文档为准")
+        if getattr(result, "warnings", ()):
+            self.warning_var.set("预览字体替代：" + "；".join(result.warnings) + "。请核对原字体是否已安装。")
         if self.selected_content_object is not None:
             self.after(50, lambda: self.document_editor.scroll_to(self.selected_content_object.key, highlight=False))
 
@@ -2111,8 +2142,41 @@ class CurrentDesktopApp(LegacyWorkbench):
         self._import_exam_path(supported[0])
 
     def _import_exam_path(self, path: Path) -> None:
+        if getattr(self, "_export_in_progress", False):
+            messagebox.showinfo(APP_TITLE, "请等待当前导出完成后再导入试题。", parent=self)
+            return
+        # Keep Tk responsive; only apply the latest import on its UI thread.
+        self._import_generation = getattr(self, "_import_generation", 0) + 1
+        generation = self._import_generation
+        self._preview_service.cancel()
+        self._import_in_progress = True
+        self.busy = False
+        self.busy_bar.stop()
+        self.status_var.set(f"正在读取：{path.name}")
+        future = self._export_executor.submit(import_exam, path)
+
+        def poll() -> None:
+            if generation != self._import_generation:
+                future.cancel()
+                return
+            if not future.done():
+                self.after(40, poll)
+                return
+            try:
+                result = future.result()
+            except Exception as exc:
+                self._import_in_progress = False
+                self.status_var.set(f"导入失败：{path.name}")
+                messagebox.showerror(APP_TITLE, str(exc), parent=self)
+                return
+            self._import_in_progress = False
+            self._apply_imported_exam(path, result)
+
+        self.after(40, poll)
+
+    def _apply_imported_exam(self, path: Path, result: dict) -> None:
         try:
-            self.raw_exam = import_exam(path)
+            self.raw_exam = result
         except (OSError, ValueError, RuntimeError) as exc:
             messagebox.showerror(APP_TITLE, str(exc), parent=self)
             return
@@ -2140,10 +2204,10 @@ class CurrentDesktopApp(LegacyWorkbench):
         lines: list[str] = []
         if summary.missing_questions:
             lines.append("未填写分值：" + "、".join(summary.missing_questions))
-        if summary.total != TARGET_SCORE:
+        if summary.total != summary.target:
             lines.append(self._score_difference_text(summary))
         question_count = sum(1 for block in self.raw_exam.get("blocks", []) if block.get("type") == "question")
-        if self.raw_exam.get("document_kind") != "answer" and question_count != 23:
+        if self.raw_exam.get("document_kind") != "answer" and question_count == 0:
             lines.append(f"当前识别 {question_count} 道题，与默认模板题量不同")
         diagnostics = self.raw_exam.get("diagnostics", [])
         if diagnostics:
@@ -2332,14 +2396,14 @@ class CurrentDesktopApp(LegacyWorkbench):
             "margin_right_mm": float(page.get("margin_right_mm", 18)),
         }
         metadata = self.raw_exam.setdefault("metadata", {})
-        metadata["target_pages"] = 8
+        metadata["target_pages"] = 0 if metadata.get("document_scope") == "practice" else 8
         metadata["layout_preset"] = "national"
         metadata["page_overrides"] = margins
         self.loading_fields = True
         try:
             if "layout_preset_var" in self.__dict__:
                 self.layout_preset_var.set(PRESET_LABELS["national"])
-            self.target_pages_var.set("8")
+            self.target_pages_var.set(str(metadata["target_pages"]))
             self.margin_top_var.set(str(margins["margin_top_mm"]).rstrip("0").rstrip("."))
             self.margin_bottom_var.set(str(margins["margin_bottom_mm"]).rstrip("0").rstrip("."))
             self.margin_left_var.set(str(margins["margin_left_mm"]).rstrip("0").rstrip("."))
@@ -2426,11 +2490,16 @@ class CurrentDesktopApp(LegacyWorkbench):
             parent=self,
         )
 
-    def check_for_updates(self) -> None:
+    def check_for_updates(self, *, automatic: bool = False) -> None:
         """Check GitHub for a newer release without blocking the UI."""
 
-        self.status_var.set("正在连接 GitHub 检查更新……")
-        self.busy_bar.start(10)
+        if self._update_in_progress:
+            return
+        self._update_in_progress = True
+        self._update_automatic = automatic
+        if not automatic:
+            self.status_var.set("正在连接 GitHub 检查更新……")
+            self.busy_bar.start(10)
 
         def worker() -> None:
             try:
@@ -2449,14 +2518,22 @@ class CurrentDesktopApp(LegacyWorkbench):
             self.after(120, self._poll_update_messages)
             return
         if kind == "update_error":
+            self._update_in_progress = False
+            if self._update_automatic:
+                self.status_var.set(f"自动检查更新失败，可在帮助菜单重试：{payload}")
+                return
             self.busy_bar.stop()
             self.status_var.set("检查更新失败。")
             messagebox.showerror(APP_TITLE, str(payload), parent=self)
             return
         if kind == "checked":
-            self.busy_bar.stop()
+            self._update_in_progress = False
+            if not self._update_automatic:
+                self.busy_bar.stop()
             info = payload
             if not info.newer:
+                if self._update_automatic:
+                    return
                 self.status_var.set("当前已是最新版。")
                 messagebox.showinfo(
                     APP_TITLE,
@@ -2476,6 +2553,7 @@ class CurrentDesktopApp(LegacyWorkbench):
                 self._download_update(info)
             return
         if kind == "downloaded":
+            self._update_in_progress = False
             self.busy_bar.stop()
             self.status_var.set("更新包已下载，准备安装。")
             try:
@@ -2493,6 +2571,8 @@ class CurrentDesktopApp(LegacyWorkbench):
     def _download_update(self, info: object) -> None:
         """Download the selected portable release in a worker thread."""
 
+        self._update_automatic = False
+        self._update_in_progress = True
         self.status_var.set("正在下载 GitHub 更新包……")
         self.busy_bar.start(10)
 

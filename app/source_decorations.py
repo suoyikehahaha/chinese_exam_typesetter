@@ -9,6 +9,7 @@ from typing import Any, Iterator
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from .paragraph_identity import paragraph_identity
 
 
 def restore_source_decorations(
@@ -24,20 +25,25 @@ def restore_source_decorations(
     document = Document(target)
     paragraphs = list(_all_paragraphs(document))
     for entry in entries:
-        matches = [
-            paragraph
-            for paragraph in paragraphs
-            if paragraph.text.strip() == str(entry.get("text", "")).strip()
-        ]
+        matches = []
+        for paragraph in paragraphs:
+            if paragraph_identity(paragraph.text) == paragraph_identity(entry.get("text", "")):
+                matches.append((paragraph, 0))
+                continue
+            offset = 0
+            for line in paragraph.text.splitlines(keepends=True):
+                if paragraph_identity(line) == paragraph_identity(entry.get("text", "")):
+                    matches.append((paragraph, offset))
+                offset += len(line)
         occurrence = int(entry.get("occurrence", 0))
         if occurrence >= len(matches):
             continue
-        paragraph = matches[occurrence]
+        paragraph, offset = matches[occurrence]
         for mark in entry.get("ranges", []):
             _decorate_range(
                 paragraph,
-                int(mark.get("start", 0)),
-                int(mark.get("end", 0)),
+                offset + int(mark.get("start", 0)),
+                offset + int(mark.get("end", 0)),
                 str(mark.get("underline", "")),
                 str(mark.get("emphasis", "")),
                 bool(mark.get("bold", False)),
@@ -56,7 +62,7 @@ def _decorate_range(
     if start >= end:
         return
     old_runs = list(paragraph.runs)
-    fragments: list[tuple[str, Any, bool]] = []
+    fragments: list[tuple[str | None, Any, bool]] = []
     cursor = 0
     for run in old_runs:
         text = run.text
@@ -77,10 +83,15 @@ def _decorate_range(
                 )
             )
         cursor = run_end
+        if run._r.xpath('./w:drawing | ./w:pict | ./w:object'):
+            fragments.append((None, run, False))
     for run in old_runs:
         paragraph._p.remove(run._r)
     for text, source, selected in fragments:
-        run = paragraph.add_run(text)
+        run = paragraph.add_run(text or '')
+        if text is None:
+            for element in source._r.xpath('./w:drawing | ./w:pict | ./w:object'):
+                run._r.append(deepcopy(element))
         if source._r.rPr is not None:
             run._r.insert(0, deepcopy(source._r.rPr))
         if selected:

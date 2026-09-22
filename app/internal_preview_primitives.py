@@ -121,7 +121,7 @@ def render_internal_preview(
                 x = right - width
             elif alignment in {"justify", "两端对齐"}:
                 x = left + (indent_px if line_index == 0 else 0)
-            draw.text((x, y), line, fill=color, font=font)
+            draw.text((x, y), line, fill=color, font=font, stroke_width=getattr(font, "preview_stroke_width", 0))
             y += line_height
         y += int(float(spec.get("space_after_pt", 0)) * 1.3 + after)
 

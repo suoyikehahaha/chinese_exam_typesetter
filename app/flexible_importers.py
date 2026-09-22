@@ -13,7 +13,8 @@ import re
 import tempfile
 from typing import Any, Iterable, Iterator
 
-from docx import Document
+from docx import Document as OpenDocument
+from .document_read_session import Document, document_read_session
 from docx.document import Document as DocumentObject
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
@@ -97,7 +98,13 @@ def _docx_lines(document: DocumentObject) -> Iterator[str]:
 def parse_plain_lines(lines: Iterable[str], title: str = "\u9ad8\u4e2d\u8bed\u6587\u8bd5\u5377") -> dict[str, Any]:
     """\u4f7f\u7528\u5377\u9996\u72b6\u6001\u3001\u8fde\u7eed\u9898\u53f7\u548c\u9898\u578b\u8bc1\u636e\u89e3\u6790\u666e\u901a\u6587\u672c\u3002"""
 
-    clean_lines = [str(line).strip() for line in lines if str(line).strip()]
+    clean_lines = []
+    for value in lines:
+        line = str(value).strip()
+        if not line:
+            continue
+        notice = re.match(r"^(注意事项|考生须知)\s*[：:]\s*(.+)$", line)
+        clean_lines.extend([notice.group(1) + "：", notice.group(2)] if notice else [line])
     if not clean_lines:
         raise ValueError("\u6587\u4ef6\u4e2d\u6ca1\u6709\u53ef\u8bc6\u522b\u7684\u6587\u5b57\u3002")
 
@@ -109,6 +116,8 @@ def parse_plain_lines(lines: Iterable[str], title: str = "\u9ad8\u4e2d\u8bed\u65
     expected_number = 1
     in_notice = False
     first_section_seen = False
+    awaiting_material = False
+    supplementary = False
 
     def flush_material() -> None:
         nonlocal pending_material
@@ -123,9 +132,14 @@ def parse_plain_lines(lines: Iterable[str], title: str = "\u9ad8\u4e2d\u8bed\u65
             continue
 
         if SECTION_RE.match(line):
+            if awaiting_material and not any(cue in line for cue in ("阅读", "默写", "名篇名句", "语言文字", "写作", "作文")):
+                pending_material.append(line)
+                continue
             flush_material()
+            awaiting_material = False
             in_notice = False
             first_section_seen = True
+            supplementary = False
             current_question = None
             blocks.append({"type": "section_title", "text": line})
             continue
@@ -148,9 +162,17 @@ def parse_plain_lines(lines: Iterable[str], title: str = "\u9ad8\u4e2d\u8bed\u65
             blocks.append({"type": "subsection", "name": name, "meta": meta})
             continue
 
+        if "附加题" in line and re.search(r"不计入(?:总分|分数|成绩)", line):
+            flush_material()
+            current_question = None
+            supplementary = True
+            blocks.append({"type": "instruction", "text": line})
+            continue
+
         if line.startswith("\u9605\u8bfb\u4e0b\u9762"):
             flush_material()
             current_question = None
+            awaiting_material = True
             blocks.append({"type": "instruction", "text": line})
             continue
 
@@ -164,7 +186,7 @@ def parse_plain_lines(lines: Iterable[str], title: str = "\u9ad8\u4e2d\u8bed\u65
                 should_accept = questions_started or confidence >= 3
             elif questions_started and number > expected_number and confidence >= 4:
                 should_accept = True
-            elif not questions_started and number == 1 and confidence >= 4:
+            elif (not questions_started or current_question is None) and (confidence >= 4 or (first_section_seen and confidence >= 3 and SCORE_RE.search(stem))):
                 should_accept = True
 
             if should_accept:
@@ -172,16 +194,18 @@ def parse_plain_lines(lines: Iterable[str], title: str = "\u9ad8\u4e2d\u8bed\u65
                 score_match = SCORE_RE.search(stem)
                 score = float(score_match.group(1)) if score_match else None
                 if score_match:
-                    stem = stem[: score_match.start()].rstrip()
+                    stem = (stem[: score_match.start()] + stem[score_match.end():]).strip()
                 current_question = {
                     "number": number,
                     "kind": "subjective",
                     "stem": stem,
                     "score": score,
                     "options": [],
+                    "counts_toward_total": not supplementary,
                 }
                 blocks.append({"type": "question", "question": current_question})
                 questions_started = True
+                awaiting_material = False
                 expected_number = number + 1
                 continue
 
@@ -203,13 +227,64 @@ def parse_plain_lines(lines: Iterable[str], title: str = "\u9ad8\u4e2d\u8bed\u65
         for block in blocks
         if block.get("type") == "question"
     ]
-    if not question_numbers:
+    if not question_numbers and not any(
+        any(cue in str(block.get("text", "")) + str(block.get("name", "")) for cue in ("文言文", "诗歌", "默写", "名篇名句"))
+        for block in blocks if block.get("type") in {"section_title", "subsection", "instruction"}
+    ):
         raise ValueError(
             "\u6ca1\u6709\u8bc6\u522b\u5230\u9898\u76ee\u3002\u5efa\u8bae\u68c0\u67e5\u9898\u53f7\u662f\u5426\u4f7f\u7528\u201c1\uff0e\u9898\u5e72\u201d\u5f62\u5f0f\uff0c"
             "\u6216\u5148\u4fdd\u5b58\u4e3a\u53ef\u590d\u5236\u6587\u5b57\u7684 DOCX\u3001PDF\u3002"
         )
-    metadata["total_score"] = _score_total_or_default(blocks, metadata["total_score"])
+    _recover_question_scores(blocks)
+    if not metadata.get("declared_total_score"):
+        metadata["total_score"] = _score_total_or_default(blocks, metadata["total_score"])
+    # A selection preserves source numbering and never stretches to eight pages.
+    header_text = " ".join(clean_lines[:3]) + " " + title
+    practice = bool(re.search(r"限时训练|专项|专题训练|片段练习", header_text))
+    practice = practice or (len(question_numbers) < 20 and not any(
+        "写作" in str(block.get("text", "")) for block in blocks
+    ) and not (metadata.get("declared_total_score") and metadata["total_score"] >= 150))
+    metadata["document_scope"] = "practice" if practice else "full_exam"
+    if practice:
+        metadata["target_pages"] = 0
+        if not metadata.get("declared_total_score"):
+            metadata["total_score"] = sum(
+                float(b["question"].get("score") or 0) for b in blocks if b.get("type") == "question" and b["question"].get("counts_toward_total", True)
+            )
     return {"metadata": metadata, "blocks": blocks}
+
+
+def _recover_question_scores(blocks: list[dict[str, Any]]) -> None:
+    """Use explicit late score labels and unambiguous single-question headings."""
+    heading_score = None
+    group = []
+
+    def finish():
+        if heading_score is not None and len(group) == 1 and group[0].get("score") is None:
+            group[0]["score"] = heading_score
+
+    for block in blocks:
+        if block.get("type") in {"section_title", "subsection"}:
+            finish()
+            group = []
+            label = str(block.get("text", "")) + str(block.get("meta", "")) + str(block.get("name", ""))
+            match = re.search(r"共\s*1\s*小题[，,、]\s*(\d+(?:\.\d+)?)\s*分", label)
+            heading_score = float(match.group(1)) if match else None
+        question = block.get("question")
+        if not question:
+            continue
+        group.append(question)
+        if question.get("score") is None:
+            values = []
+            for segments in question.get("embedded_segments", []):
+                text = "".join(s.get("text", "") for s in segments)
+                if not SUBQUESTION_RE.match(text):
+                    match = SCORE_RE.search(text)
+                    if match:
+                        values.append(float(match.group(1)))
+            if len(values) == 1:
+                question["score"] = values[0]
+    finish()
 
 def _metadata_from_header(lines: list[str], fallback_title: str) -> dict[str, Any]:
     first_section = next(
@@ -221,7 +296,7 @@ def _metadata_from_header(lines: list[str], fallback_title: str) -> dict[str, An
         (
             line
             for line in header
-            if ("\u8003\u8bd5" in line or "\u8bd5\u5377" in line) and not NOTICE_RE.match(line)
+            if any(word in line for word in ("考试", "试卷", "限时训练", "专项训练")) and not NOTICE_RE.match(line)
         ),
         fallback_title,
     )
@@ -235,7 +310,7 @@ def _metadata_from_header(lines: list[str], fallback_title: str) -> dict[str, An
             for line in header
             if ("\u6ee1\u5206" in line or "\u8003\u8bd5\u65f6\u95f4" in line) and not QUESTION_RE.match(line)
         ),
-        "\u8bf7\u5728\u5de6\u4fa7\u68c0\u67e5\u8bd5\u5377\u4fe1\u606f\u3001\u9898\u76ee\u5206\u503c\u548c\u7248\u5f0f\u53c2\u6570\u3002",
+        "",
     )
     total_match = re.search(r"\u6ee1\u5206\s*(\d+(?:\.\d+)?)\s*\u5206", " ".join(header))
     total_score = float(total_match.group(1)) if total_match else 150
@@ -244,6 +319,7 @@ def _metadata_from_header(lines: list[str], fallback_title: str) -> dict[str, An
         "subject_name": subject_name,
         "meta_text": meta_text,
         "total_score": total_score,
+        "declared_total_score": bool(total_match),
         "notices": [],
     }
 
@@ -258,8 +334,13 @@ def _question_confidence(stem: str, lines: list[str], index: int) -> int:
     if _extract_options(stem):
         score += 3
     for following in lines[index + 1 : index + 4]:
+        if SECTION_RE.match(following) or SUBSECTION_RE.match(following) or QUESTION_RE.match(following):
+            break
         if _extract_options(following):
             score += 3
+            break
+        if SCORE_RE.search(following) and not SUBQUESTION_RE.match(following):
+            score += 1
             break
     return score
 
@@ -369,7 +450,8 @@ def _normalize_composition(result: dict[str, Any]) -> None:
         question = block.get("question")
         if not question:
             continue
-        if question.get("number") != 23 and "\u5199\u4f5c" not in str(question.get("stem", "")):
+        content = str(question.get("stem", "")) + str(question.get("embedded_segments", []))
+        if not re.search(r"写作|写一篇|不少于\s*800\s*字|不少于八百字", content):
             continue
         paragraphs = [
             "".join(str(segment.get("text", "")) for segment in segments)
@@ -415,6 +497,7 @@ def _normalize_title_authors(result: dict[str, Any]) -> None:
             (index, match)
             for index, text in enumerate(paragraphs)
             if (match := TITLE_AUTHOR_RE.match(str(text)))
+            and _is_author(match.group(2))
         ]
         if not matched:
             normalized.append(block)
@@ -469,12 +552,15 @@ def _normalize_question_details(result: dict[str, Any]) -> None:
             if sub_match:
                 subquestions.append(sub_match.group(2).strip())
             elif (
-                question.get("number") == 10
+                any(cue in str(question.get("stem", "")) for cue in ("断句", "断开", "停顿"))
                 and SEGMENTATION_MARKERS_RE.search(text)
             ):
                 question["segmentation_text"] = text
             else:
-                remaining.append(segments)
+                if subquestions:
+                    subquestions[-1] += "\n" + text
+                else:
+                    remaining.append(segments)
         question["embedded_segments"] = remaining
         if subquestions:
             question["subquestions"] = subquestions
@@ -486,7 +572,7 @@ def _normalize_question_details(result: dict[str, Any]) -> None:
 SECTION_RE = re.compile(r"^[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341]+\u3001")
 
 SUBJECT_RE = re.compile(
-    r"^\s*\u8bed\s*\u6587(?:\s*\u8bd5\s*\u9898)?(?:\s+|\u3000+)?(.*)$"
+    r"^\s*语\s*文(?:\s*科)?(?:\s*试\s*[题卷])?(?:\s+|　+)?(.*)$"
 )
 
 DATE_RE = re.compile(r"\b20\d{2}(?:[.\u5e74/-]\d{1,2}(?:\u6708)?)?\b")
@@ -513,7 +599,7 @@ def _normalize_docx_header(source: Path, result: dict[str, Any]) -> None:
         (
             index
             for index, line in enumerate(header)
-            if re.fullmatch(r"\s*\u6ce8\u610f\u4e8b\u9879\s*[\uff1a:]?\s*", line)
+            if re.match(r"\s*(?:注意事项|考生须知)\s*[：:]?", line)
         ),
         len(header),
     )
@@ -593,6 +679,31 @@ def _looks_like_meta(text: str) -> bool:
         or "\u7b54\u9898" in text
         or "\u8003\u751f" in text
     )
+
+def _normalize_dynasty_poems(result: dict[str, Any]) -> None:
+    """Recognize unlabelled poem pairs with author-followed dynasty brackets."""
+    normalized = []
+    instruction = ""
+    for block in result.get("blocks", []):
+        if block.get("type") == "instruction":
+            instruction = block.get("text", "")
+        paragraphs = block.get("paragraphs", [])
+        if block.get("type") != "material" or not re.search(r"首.*[诗词]|[诗词].*首", instruction):
+            normalized.append(block)
+            continue
+        starts = [i for i in range(len(paragraphs)-2)
+                  if re.fullmatch(r"[^，。！？；：]{1,24}", paragraphs[i])
+                  and re.fullmatch(r"[\u3400-\u9fff·]{2,10}\s*[【\[(（](?:先秦|秦|汉|魏晋|南北朝|隋|唐|五代|南唐|宋|北宋|南宋|元|明|清)[】\])）]", paragraphs[i+1])]
+        if not starts or starts[0] != 0:
+            normalized.append(block)
+            continue
+        for index, start in enumerate(starts):
+            end = starts[index+1] if index+1 < len(starts) else len(paragraphs)
+            body = list(paragraphs[start+2:end])
+            note = body.pop() if body and NOTE_RE.match(body[-1]) else ""
+            normalized.append({"type":"poetry", "title":paragraphs[start], "author":paragraphs[start+1], "paragraphs":body, "note":note})
+    result["blocks"] = normalized
+
 
 def _normalize_poetry_blocks(result: dict[str, Any]) -> None:
     blocks = result.get("blocks", [])
@@ -730,6 +841,7 @@ def _refine_exam_name(source: Path, result: dict[str, Any]) -> None:
         min(len(lines), 16),
     )
     header = lines[:first_section]
+    header = [part for line in header for part in re.split(r"(?<=：)(?=\s*1[.．、])|(?<=:)(?=\s*1[.．、])", line)]
     subject_index = next(
         (index for index, line in enumerate(header) if SUBJECT_RE.match(line)),
         len(header),
@@ -781,7 +893,7 @@ BODY_LEAD_RE = re.compile(
 
 LABEL_RE = re.compile(r"^(?:\u6750\u6599|\u6587\u672c)(?:[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341]+|\d+)\s*[\uff1a:]")
 
-SCORE_RE = re.compile(r"[\uff08(]\s*(\d+(?:\.\d+)?)\s*\u5206\s*[\uff09)]\s*$")
+SCORE_RE = re.compile(r"[（(]\s*(\d+(?:\.\d+)?)\s*分\s*[）)](?=\s*(?:[（(][\s\u3000]*[）)]\s*)*$)")
 
 def _normalize_separate_title_authors(result: dict[str, Any]) -> None:
     """Promote short title and author lines in prose reading materials."""
@@ -826,7 +938,7 @@ def _normalize_spaced_scores(result: dict[str, Any]) -> None:
         if not match:
             continue
         question["score"] = float(match.group(1))
-        question["stem"] = stem[: match.start()].rstrip()
+        question["stem"] = (stem[: match.start()] + stem[match.end():]).strip()
 
 def _record_segmentation_markers(result: dict[str, Any]) -> None:
     """Record exactly the uppercase markers found in each segmentation passage."""
@@ -980,7 +1092,7 @@ def _normalize_composition_prompts(result: dict[str, Any]) -> None:
     )
     for block in result.get("blocks", []):
         question = block.get("question")
-        if not question or int(question.get("number", 0)) != 23:
+        if not question or not question.get("composition_material"):
             continue
         material: list[str] = []
         prompt = [str(value) for value in question.get("composition_prompt", [])]
@@ -1085,7 +1197,7 @@ def _normalize_header_notices(source: Path, result: dict[str, Any]) -> None:
         ),
         min(len(lines), 18),
     )
-    header = lines[:first_section]
+    header = [part for line in lines[:first_section] for part in re.split(r"(?<=：)(?=\s*1[.．、])|(?<=:)(?=\s*1[.．、])", line)]
     notice_index = next(
         (
             index
@@ -1374,12 +1486,14 @@ def _enhance_material_titles_authors(
         if len(roles) != len(paragraphs):
             roles = ["body"] * len(paragraphs)
         formats = list(block.get("paragraph_formats", []))
+        offset = int(bool(block.get("title"))) + int(bool(block.get("author")))
         for index, text in enumerate(paragraphs):
             if SOURCE_RE.fullmatch(text):
                 roles[index] = "source"
-                formats.append(_format(index, "\u4eff\u5b8b", "\u53f3\u5bf9\u9f50", "source"))
+                formats.append(_format(index + offset, "\u4eff\u5b8b", "\u53f3\u5bf9\u9f50", "source"))
                 continue
-            if text not in centered:
+            source_text = text if text in centered else re.sub(r"^[一二三四五六七八九十]+、", "", text)
+            if source_text not in centered:
                 continue
             previous_centered = index > 0 and paragraphs[index - 1] in centered
             next_is_author = (
@@ -1389,10 +1503,10 @@ def _enhance_material_titles_authors(
             )
             if _is_author(text) and previous_centered:
                 roles[index] = "author"
-                formats.append(_format(index, "\u4eff\u5b8b", "\u5c45\u4e2d", "author"))
-            elif text in centered_bold or next_is_author:
+                formats.append(_format(index + offset, "\u4eff\u5b8b", "\u5c45\u4e2d", "author"))
+            elif source_text in centered_bold or next_is_author:
                 roles[index] = "subheading"
-                formats.append(_format(index, "\u9ed1\u4f53", "\u5c45\u4e2d", "subheading"))
+                formats.append(_format(index + offset, "\u9ed1\u4f53", "\u5c45\u4e2d", "subheading"))
         block["paragraph_roles"] = roles
         if formats:
             block["paragraph_formats"] = _deduplicate_formats(formats)
@@ -1414,7 +1528,7 @@ def _trim_answer_from_exam(result: dict[str, Any]) -> None:
     for block in result.get("blocks", []):
         question = block.get("question")
         marker_found = False
-        if question and int(question.get("number", 0)) == 23:
+        if question and any(question.get(key) for key in ("composition_material", "composition_prompt", "composition_requirements")):
             for key in (
                 "composition_material",
                 "composition_prompt",
@@ -1641,6 +1755,9 @@ def _format_prefix(definition: NumberingLevel, value: int) -> str:
         label = _letters(value).lower()
     elif definition.num_fmt == "decimal":
         label = str(value)
+    elif definition.num_fmt in {"chineseCounting", "chineseCountingThousand"} and 0 < value < 100:
+        digits = "零一二三四五六七八九"
+        label = digits[value] if value < 10 else (digits[value // 10] if value >= 20 else "") + "十" + (digits[value % 10] if value % 10 else "")
     else:
         return ""
     prefix = definition.level_text.replace("%1", label)
@@ -1771,6 +1888,8 @@ def _role_format(
 
 def _is_author(value: str) -> bool:
     text = value.strip()
+    if any(cue in text for cue in ("研究报告", "研究结论", "问题提出", "资料整理")):
+        return False
     if not _AUTHOR_RE.fullmatch(text):
         return False
     return 2 <= len(re.findall(r"[\u3400-\u9fff]", text)) <= 20
@@ -1807,9 +1926,10 @@ def _run_docx_normalizers(source: Path, result: dict[str, Any]) -> dict[str, Any
     """Apply the verified normalization passes in their historical order."""
 
     _normalize_composition(result)
+    _normalize_docx_header(source, result)
     _normalize_title_authors(result)
     _normalize_question_details(result)
-    _normalize_docx_header(source, result)
+    _normalize_dynasty_poems(result)
     _normalize_poetry_blocks(result)
     _normalize_notes(result)
     result.setdefault("metadata", {})["source_decorations"] = (
@@ -1831,6 +1951,7 @@ def _run_docx_normalizers(source: Path, result: dict[str, Any]) -> dict[str, Any
     return result
 
 
+@document_read_session
 def import_exam(path: str | Path) -> dict[str, Any]:
     """Import one exam or answer document through the canonical pipeline.
 
@@ -1867,7 +1988,9 @@ def import_exam(path: str | Path) -> dict[str, Any]:
     if is_standalone_answer_docx(source):
         return standalone_answer_model(parse_answer_docx(source))
 
-    document = Document(source)
+    # Reopen for numbering edits: cached python-docx back-references cannot
+    # reliably be deep-copied together with the package's serialization tree.
+    document = OpenDocument(source)
     inserted = materialize_automatic_numbering(document)
     if inserted:
         with tempfile.TemporaryDirectory(prefix="exam-numbering-") as folder:
@@ -1880,6 +2003,12 @@ def import_exam(path: str | Path) -> dict[str, Any]:
         result = _run_docx_normalizers(source, result)
 
     _enhance_material_titles_authors(source, result)
+    original_lines = [p.text.strip() for p in Document(source).paragraphs if p.text.strip()]
+    boundary = next((i for i, line in enumerate(original_lines) if SECTION_RE.match(line) or line.startswith("阅读下面") or QUESTION_RE.match(line)), 0)
+    metadata = result.setdefault("metadata", {})
+    excluded = {str(metadata.get(key, "")).strip() for key in ("exam_name", "subject_name", "meta_text", "confidentiality_text", "exam_info_text")}
+    if not metadata.get("notices"):
+        metadata["header_lines"] = [line for line in original_lines[:boundary] if line not in excluded and not SUBJECT_RE.match(line)]
     answer_start = find_answer_start(source)
     if answer_start is not None:
         _trim_answer_from_exam(result)

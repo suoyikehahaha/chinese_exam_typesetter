@@ -18,8 +18,11 @@ MAX_FEEDBACK_STEP = 1.06
 def get_target_pages(raw_exam: dict[str, Any]) -> int:
     """Read and clamp the requested output page count."""
 
-    value = raw_exam.get("metadata", {}).get("target_pages", DEFAULT_TARGET_PAGES)
+    metadata = raw_exam.get("metadata", {})
+    value = metadata.get("target_pages", 0 if metadata.get("document_scope") == "practice" else DEFAULT_TARGET_PAGES)
     try:
+        if int(value) == 0:
+            return 0
         return max(MIN_TARGET_PAGES, min(MAX_TARGET_PAGES, int(value)))
     except (TypeError, ValueError):
         return DEFAULT_TARGET_PAGES
@@ -69,6 +72,8 @@ def spacing_scale_for_target(
     """Return an explicit scale or one small feedback step from measured pages."""
 
     metadata = raw_exam.get("metadata", {})
+    if get_target_pages(raw_exam) == 0:
+        return 1.0
     if current_scale is None:
         try:
             current_scale = float(metadata.get("page_spacing_scale", 1.0))

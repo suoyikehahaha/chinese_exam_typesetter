@@ -17,6 +17,10 @@ from .config import load_layout
 from .internal_preview_primitives import _font, _wrap_text
 from .page_layout import adjusted_layout
 from .page_target import get_target_pages
+from .preview_cancellation import check_cancelled
+from .chinese_line_break import wrap_plain_text, wrap_rich_text
+from .font_resolver import font_substitution_notice
+from .paragraph_identity import paragraph_identity
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +29,7 @@ class InternalPreviewResult:
     locators: dict[int, tuple[int, float]]
     target_pages: int
     actual_pages: int
+    warnings: tuple[str, ...] = ()
 
 
 _MATERIAL_LABEL_RE = re.compile(
@@ -47,7 +52,13 @@ class _SourceVisuals:
     image_cursor: dict[str, int]
 
     def marks_for(self, text: str) -> list[dict[str, Any]]:
-        key = str(text).strip()
+        if "\n" in text:
+            marks, offset = [], 0
+            for line in text.splitlines(keepends=True):
+                marks.extend({**mark, "start":mark["start"]+offset, "end":mark["end"]+offset} for mark in self.marks_for(line.rstrip("\r\n")))
+                offset += len(line)
+            return marks
+        key = paragraph_identity(text)
         entries = self.decorations.get(key, [])
         position = self.decoration_cursor.get(key, 0)
         if position >= len(entries):
@@ -56,7 +67,7 @@ class _SourceVisuals:
         return list(entries[position].get("ranges", []))
 
     def images_for(self, text: str) -> list[Image.Image]:
-        key = str(text).strip()
+        key = paragraph_identity(text)
         groups = self.images.get(key, [])
         position = self.image_cursor.get(key, 0)
         if position >= len(groups):
@@ -72,7 +83,7 @@ def _load_source_visuals(raw_exam: dict[str, Any]) -> _SourceVisuals:
     decorations: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for entry in metadata.get("source_decorations", []):
         if isinstance(entry, dict) and str(entry.get("text", "")).strip():
-            decorations[str(entry["text"]).strip()].append(entry)
+            decorations[paragraph_identity(entry["text"])].append(entry)
     images: dict[str, list[list[Image.Image]]] = defaultdict(list)
     source_path = Path(str(metadata.get("source_docx_path", "")))
     if not source_path.is_file():
@@ -88,7 +99,7 @@ def _load_source_visuals(raw_exam: dict[str, Any]) -> _SourceVisuals:
             blips = paragraph._p.xpath(".//a:blip")
             if not blips:
                 continue
-            key = paragraph.text.strip() or markers.get(paragraph_index, "")
+            key = paragraph_identity(paragraph.text) or markers.get(paragraph_index, "")
             if not key:
                 continue
             group: list[Image.Image] = []
@@ -180,7 +191,7 @@ def _draw_rich_line(
             return
         value = "".join(segment)
         chosen = bold_font if segment_bold else font
-        draw.text((cursor, y), value, fill="#111111", font=chosen)
+        draw.text((cursor, y), value, fill="#111111", font=chosen, stroke_width=getattr(chosen, "preview_stroke_width", 0))
         width = draw.textlength(value, font=chosen)
         if segment_underline:
             baseline = y + max(2, int(getattr(chosen, "size", 12))) + 1
@@ -231,6 +242,7 @@ def render_internal_preview(
 
     pages: list[Path] = []
     locators: dict[int, tuple[int, float]] = {}
+    font_notices: set[str] = set()
     page: Image.Image | None = None
     draw: ImageDraw.ImageDraw | None = None
     y = top
@@ -258,7 +270,7 @@ def render_internal_preview(
         if page is not None:
             finalize_page(len(pages) + 1)
             target = output / f"page-{len(pages) + 1}.png"
-            page.save(target, "PNG")
+            page.save(target, "PNG", compress_level=1)
             pages.append(target)
         page = Image.new("RGB", (width, height), "white")
         draw = ImageDraw.Draw(page)
@@ -266,6 +278,7 @@ def render_internal_preview(
 
     def draw_source_images(images: list[Image.Image]) -> None:
         nonlocal y
+        check_cancelled()
         for source_image in images:
             image = source_image.convert("RGBA")
             max_width = max(1, right - left)
@@ -297,17 +310,34 @@ def render_internal_preview(
     ) -> None:
         nonlocal y
         spec = dict(layout.get("styles", {}).get(role, layout.get("styles", {}).get("material_body", {})))
+        check_cancelled()
         if override:
             spec.update({key: value for key, value in override.items() if value is not None})
         font_name = str(spec.get("font", "SimSun"))
         size_pt = float(spec.get("size_pt", 10.5))
         semantic_bold = bool(spec.get("bold", False))
         font = _font(font_name, size_pt, semantic_bold)
+        notice = font_substitution_notice(font_name, font)
+        if notice:
+            font_notices.add(notice)
         line_spacing = float(spec.get("line_spacing", layout.get("defaults", {}).get("body_line_spacing", 1.25)))
         line_height = max(14, int((font.size * line_spacing + 3) * _WORD_LINE_BOX_FACTOR))
         indent = float(spec.get("first_line_indent_chars", 0) if indent_chars is None else indent_chars)
-        indent_px = int(size_pt * indent * 1.2)
-        alignment = align or str(spec.get("alignment", "left"))
+        if override and "first_line_indent_chars" in override:
+            indent = float(override["first_line_indent_chars"])
+        if "special_indent" in spec:
+            special = str(spec["special_indent"])
+            indent = float(spec.get("special_indent_chars", 0)) * (1 if special in {"首行", "first_line"} else -1 if special in {"悬挂", "hanging"} else 0)
+        point_px = px_per_mm * 25.4 / 72
+        indent_px = int(size_pt * indent * point_px)
+        text_left = left + int(float(spec.get("left_indent_chars", 0)) * size_pt * point_px)
+        if indent < 0:
+            text_left += abs(indent_px)
+        text_right = right - int(float(spec.get("right_indent_chars", 0)) * size_pt * point_px)
+        alignment = str((override or {}).get("alignment", align or spec.get("alignment", "left")))
+        if spec.get("page_break_before") and page is not None and y > top:
+            new_page()
+        y += int(float(spec.get("space_before_pt", 0)) * point_px)
         source_images = source_visuals.images_for(text)
         if source_images and _NATIVE_DRAWING_RE.fullmatch(str(text).strip()):
             if page is None:
@@ -322,26 +352,39 @@ def render_internal_preview(
             return
         marks = source_visuals.marks_for(text)
         drawing = draw or ImageDraw.Draw(Image.new("RGB", (1, 1)))
-        bold_font = _font(font_name, size_pt, True)
+        bold_font = _font(font_name, size_pt, True) if any(mark.get("bold") for mark in marks) else font
+        if marks and (notice := font_substitution_notice(font_name, bold_font)):
+            font_notices.add(notice)
         if marks:
-            line_infos = _wrap_rich_text(
+            line_infos = wrap_rich_text(
                 drawing,
                 text,
                 font,
                 bold_font,
-                right - left - indent_px,
+                text_right - text_left,
                 marks,
+                first_width=text_right - text_left - indent_px,
             )
         else:
             line_infos = [
                 (line, 0, 0)
-                for line in _wrap_text(drawing, text, font, right - left - indent_px)
+                for line in wrap_plain_text(drawing, text, font, text_right - text_left, first_width=text_right - text_left - indent_px)
             ]
         if not line_infos:
             line_infos = [("", 0, 0)]
         if page is None:
             new_page()
+        # Reserve the next line for headings / explicit paragraph keep flags.
+        keep_next = bool(spec.get("keep_with_next")) or role in {"section_title", "subsection", "material_title", "material_author", "instruction"}
+        needed = len(line_infos) * line_height + (line_height if keep_next else 0)
+        if source_images:
+            for source_image in source_images:
+                image_scale = min(1.0, (right - left) / max(1, source_image.width), (bottom - top) / max(1, source_image.height))
+                needed += max(1, int(source_image.height * image_scale)) + 4
+        if (keep_next or source_images) and needed <= bottom - top and y + needed > bottom and y > top:
+            new_page()
         for line_index, (line, line_start, _line_end) in enumerate(line_infos):
+            check_cancelled()
             if y + line_height > bottom:
                 new_page()
             if block_index not in locators:
@@ -359,11 +402,11 @@ def render_internal_preview(
                 )
             else:
                 line_width = drawing.textlength(line, font=font)
-            x = left + (indent_px if line_index == 0 else 0)
+            x = text_left + (indent_px if line_index == 0 else 0)
             if alignment in {"center", "居中"}:
-                x = left + (right - left - line_width) / 2
+                x = text_left + (text_right - text_left - line_width) / 2
             elif alignment in {"right", "右对齐"}:
-                x = right - line_width
+                x = text_right - line_width
             if draw:
                 if marks:
                     _draw_rich_line(
@@ -377,7 +420,7 @@ def render_internal_preview(
                         marks,
                     )
                 else:
-                    draw.text((x, y), line, fill="#111111", font=font)
+                    draw.text((x, y), line, fill="#111111", font=font, stroke_width=getattr(font, "preview_stroke_width", 0))
             y += line_height
         if source_images:
             draw_source_images(source_images)
@@ -392,6 +435,8 @@ def render_internal_preview(
     add_entry(-1, str(metadata.get("subject_name", "语　文")), "subject_name", align="center", after=4)
     if str(metadata.get("meta_text", "")).strip():
         add_entry(-1, str(metadata.get("meta_text", "")), "exam_meta", align="center", after=2)
+    for text in metadata.get("header_lines", []):
+        add_entry(-1, str(text), "exam_meta", align="center", after=2)
     notices = [str(item) for item in metadata.get("notices", []) if str(item).strip()]
     if notices:
         add_entry(-1, "注意事项：", "notice_title", after=1)
@@ -416,20 +461,25 @@ def render_internal_preview(
     if page is not None:
         finalize_page(len(pages) + 1)
         target = output / f"page-{len(pages) + 1}.png"
-        page.save(target, "PNG")
+        page.save(target, "PNG", compress_level=1)
         pages.append(target)
-    return InternalPreviewResult(tuple(pages), locators, get_target_pages(raw_exam), len(pages))
+    return InternalPreviewResult(tuple(pages), locators, get_target_pages(raw_exam), len(pages), tuple(sorted(font_notices)))
 
 
 def _material(block: dict[str, Any], index: int, add_entry: Callable[..., None]) -> None:
+    base = block.get("format", {})
+    formats = {int(item.get("target_index", -1)): item for item in block.get("paragraph_formats", []) if isinstance(item, dict)}
+    offset = int(bool(block.get("title"))) + int(bool(block.get("author")))
+    def format_at(position):
+        return {**base, **formats.get(position, {})}
     if block.get("title"):
         title = str(block["title"])
         title_align = "left" if _MATERIAL_LABEL_RE.fullmatch(title) else "center"
-        add_entry(index, title, "material_title", align=title_align, after=1)
+        add_entry(index, title, "material_title", align=title_align, after=1, override=format_at(0))
     if block.get("author"):
-        add_entry(index, str(block["author"]), "material_author", align="center", after=1)
+        add_entry(index, str(block["author"]), "material_author", align="center", after=1, override=format_at(int(bool(block.get("title")))))
     roles = [str(value) for value in block.get("paragraph_roles", [])]
-    formats = {int(item.get("target_index", -1)): item for item in block.get("paragraph_formats", []) if isinstance(item, dict)}
+    formats = {i: format_at(i + offset) for i in range(len(block.get("paragraphs", [])))}
     for paragraph_index, value in enumerate(block.get("paragraphs", [])):
         text = str(value)
         role = roles[paragraph_index] if paragraph_index < len(roles) else "body"
@@ -439,6 +489,8 @@ def _material(block: dict[str, Any], index: int, add_entry: Callable[..., None])
             add_entry(index, text, "material_source", align="right", override=formats.get(paragraph_index))
         elif role == "author":
             add_entry(index, text, "material_author", align="center", override=formats.get(paragraph_index))
+        elif block.get("type") == "poetry":
+            add_entry(index, text, "poetry", indent_chars=0, override=formats.get(paragraph_index))
         else:
             add_entry(index, text, "material_body", indent_chars=2, override=formats.get(paragraph_index))
     if block.get("note"):
@@ -451,29 +503,32 @@ def _question(question: dict[str, Any], index: int, add_entry: Callable[..., Non
     kind = str(question.get("kind", "subjective"))
     role = "objective_stem" if kind == "objective" else "subjective_stem"
     spec = question.get("format") if isinstance(question.get("format"), dict) else None
+    formats = {(entry.get("target", "stem"), int(entry.get("target_index", 0))): entry for entry in question.get("paragraph_formats", [])}
+    def format_for(target, position=0, base=None):
+        return {**(base or {}), **formats.get((target, position), {})}
     score = question.get("score")
     suffix = ""
     if score is not None:
         value = float(score)
         suffix = f"（{int(value) if value.is_integer() else value}分）"
-    add_entry(index, f"{question.get('number', '')}．{question.get('stem', '')}{suffix}", role, override=spec, indent_chars=0 if kind == "objective" else 1.5, after=1)
+    add_entry(index, f"{question.get('number', '')}．{question.get('stem', '')}{suffix}", role, override=format_for('stem', base=spec), indent_chars=0 if kind == "objective" else 1.5, after=1)
     option_spec = {
         "font": question.get("format", {}).get("option_font"),
         "size_pt": question.get("format", {}).get("option_size_pt"),
         "left_indent_chars": question.get("format", {}).get("option_left_indent_chars"),
         "first_line_indent_chars": -float(question.get("format", {}).get("option_hanging_indent_chars", 1.7)),
     } if isinstance(question.get("format"), dict) else None
-    for option in question.get("options", []):
-        add_entry(index, str(option), "choice_option", override=option_spec, indent_chars=1.5)
-    for segments in question.get("embedded_segments", []):
-        add_mixed(index, segments, spec)
+    for position, option in enumerate(question.get("options", [])):
+        add_entry(index, str(option), "choice_option", override=format_for('option', position, option_spec), indent_chars=1.5)
+    for position, segments in enumerate(question.get("embedded_segments", [])):
+        add_mixed(index, segments, format_for('embedded', position))
     if question.get("segmentation_text"):
-        add_entry(index, str(question["segmentation_text"]), "segmentation_text", indent_chars=2, override=spec)
+        add_entry(index, str(question["segmentation_text"]), "segmentation_text", indent_chars=2, override=format_for('segmentation'))
     for number, text in enumerate(question.get("subquestions", []), start=1):
-        add_entry(index, f"（{number}）{text}", "subquestion", indent_chars=2, override=spec)
+        add_entry(index, f"（{number}）{text}", "subquestion", indent_chars=2, override=format_for('subquestion', number - 1))
     for key, role_name in (("composition_material", "composition_material"), ("composition_prompt", "composition_prompt"), ("composition_requirements", "composition_requirements")):
-        for text in question.get(key, []):
-            add_entry(index, str(text), role_name, indent_chars=2, override=spec)
+        for position, text in enumerate(question.get(key, [])):
+            add_entry(index, str(text), role_name, indent_chars=2, override=format_for(key, position))
 
 
 __all__ = ["InternalPreviewResult", "render_internal_preview"]

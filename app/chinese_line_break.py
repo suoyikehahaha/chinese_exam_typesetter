@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from functools import lru_cache
 
 
 NO_LINE_START = frozenset(
@@ -12,7 +13,14 @@ NO_LINE_START = frozenset(
 NO_LINE_END = frozenset("（《【〔〈“‘([{\u2014")
 
 
+@lru_cache(maxsize=32768)
+def _font_character_width(character: str, font: Any) -> float:
+    return float(font.getlength(character))
+
+
 def _character_width(draw: Any, character: str, font: Any) -> float:
+    if hasattr(font, "getlength"):
+        return _font_character_width(character, font)
     return float(draw.textlength(character, font=font))
 
 
@@ -21,11 +29,12 @@ def wrap_plain_text(
     text: str,
     font: Any,
     width: int,
+    first_width: int | None = None,
 ) -> list[str]:
     """Wrap text using Chinese kinsoku and permit closing punctuation overflow."""
 
     result: list[str] = []
-    maximum = max(1.0, float(width))
+    maximum = max(1.0, float(width if first_width is None else first_width))
     for raw_line in str(text).splitlines() or [""]:
         if not raw_line:
             result.append("")
@@ -45,6 +54,7 @@ def wrap_plain_text(
                     moved.insert(0, current.pop())
                 if current:
                     result.append("".join(current))
+                    maximum = max(1.0, float(width))
                 current = moved
                 current_width = sum(_character_width(draw, item, font) for item in current)
             current.append(character)
@@ -60,11 +70,12 @@ def wrap_rich_text(
     bold_font: Any,
     width: int,
     ranges: list[dict[str, Any]],
+    first_width: int | None = None,
 ) -> list[tuple[str, int, int]]:
     """Wrap decorated text while retaining source positions and kinsoku rules."""
 
     result: list[tuple[str, int, int]] = []
-    maximum = max(1.0, float(width))
+    maximum = max(1.0, float(width if first_width is None else first_width))
     offset = 0
 
     def active(position: int, key: str) -> bool:
@@ -103,6 +114,7 @@ def wrap_rich_text(
                         )
                     )
                 current = moved
+                maximum = max(1.0, float(width))
                 current_width = sum(item[2] for item in current)
             current.append((character, absolute, char_width))
             current_width += char_width

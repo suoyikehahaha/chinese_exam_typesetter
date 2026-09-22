@@ -99,6 +99,8 @@ def _load_source_visuals(raw_exam: dict[str, Any]) -> Any:
     source = Path(str(metadata.get("source_docx_path", "")))
     if not source.is_file():
         return visuals
+    if not any(item.get("kind") == "table" for item in metadata.get("native_objects", [])):
+        return visuals
     try:
         document = Document(source)
     except (OSError, ValueError, RuntimeError):

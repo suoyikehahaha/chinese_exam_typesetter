@@ -117,6 +117,8 @@ class DocxRenderer:
         self._paragraph(metadata.exam_name, "exam_name")
         self._paragraph(metadata.subject_name, "subject_name")
         self._paragraph(metadata.meta_text, "exam_meta")
+        for text in metadata.header_lines:
+            self._paragraph(text, "exam_meta")
         if metadata.notices:
             self._paragraph("注意事项：", "notice_title")
             for index, notice in enumerate(metadata.notices, start=1):

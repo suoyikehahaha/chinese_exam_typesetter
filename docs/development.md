@@ -31,7 +31,7 @@ DOCX 处理不依赖办公软件。旧版 DOC 转换按需使用 Word/WPS；已�
 内部诊断模式可验证打包后的实际代码，不会自动打开编辑窗口：
 
 ```powershell
-$exe = (Resolve-Path '.\release\ChineseExamTypesetter_0.1.4.exe').Path
+$exe = (Resolve-Path '.\release\ChineseExamTypesetter_0.1.5.exe').Path
 $inputDoc = (Resolve-Path 'D:\测试目录\脱敏样例.docx').Path
 $diagnosticDir = (New-Item -ItemType Directory -Force '.\work').FullName
 foreach ($mode in @('import', 'preview', 'export')) {

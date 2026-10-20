@@ -21,7 +21,7 @@ import app.internal_preview_core as internal_preview_core
 import app.inspector_model as inspector_model
 from app.config import load_layout
 from app.current_importer import import_exam
-from app.current_pipeline import build_documents
+from app.current_pipeline import ExportDestinationError, build_documents
 from app.export_naming import default_export_basename, with_export_suffix
 from app.flexible_importers import save_exam
 from app.github_updater import (
@@ -693,6 +693,20 @@ class CurrentDesktopApp(LegacyWorkbench):
     def _finish_export(self, result: Any) -> None:
         """Publish export completion on the Tk thread."""
         self._export_in_progress = False
+        if isinstance(result, ExportDestinationError):
+            self.busy = False
+            self.busy_bar.stop()
+            self.status_var.set("目标 Word 文件正被占用或不可写")
+            retry = messagebox.askretrycancel(
+                "无法保存 Word 文件",
+                f"{result}\n\n关闭目标文件后点击“重试”；也可以点击“取消”，"
+                "重新导出并选择其他文件名。",
+                parent=self,
+            )
+            if retry:
+                target = result.target
+                self.after(100, lambda: self.start_export(target.parent, target.stem, True, False))
+            return
         if isinstance(result, Exception):
             self._finish_task_error(result)
             return

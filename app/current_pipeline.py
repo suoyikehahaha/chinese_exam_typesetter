@@ -10,6 +10,7 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 import re
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from .answer_overrides import apply_answer_overrides
@@ -37,6 +38,18 @@ from .source_decorations import restore_source_decorations
 from .style_registry import StyleRegistry
 from .validators import check_required_fonts
 from .validators import validate_exam
+
+
+class ExportDestinationError(RuntimeError):
+    """The completed DOCX could not replace the selected destination."""
+
+    def __init__(self, target: Path) -> None:
+        self.target = target
+        super().__init__(
+            f"无法写入“{target}”。该文件可能正在 Word 或 WPS 中打开，"
+            "也可能没有写入权限。请关闭占用该文件的程序后重试，"
+            "或取消后换一个文件名保存。"
+        )
 
 
 def _render_documents(
@@ -116,44 +129,66 @@ def build_documents(
         and "page_spacing_scale" in raw_exam.get("metadata", {})
         and bool(raw_exam.get("metadata", {}).get("source_docx_path"))
     )
-    docx_path: Path | None = None
+    target = output / f"{basename}.docx"
     try:
-        for _iteration in range(6 if calibrate else 1):
-            adjusted_exam = deepcopy(raw_exam)
-            adjusted_exam.setdefault("metadata", {})["page_spacing_scale"] = scale
-            _adjust_inline_spacing(adjusted_exam, scale)
-            target_layout.write_text(
-                _dump_yaml(adjusted_layout(load_layout(layout_path), adjusted_exam)),
-                encoding="utf-8",
-            )
-            docx_path, _unused_pdf, _unused_engine = _render_documents(
-                adjusted_exam,
-                target_layout,
-                output,
-                basename,
-                template_path=template_path,
-                export_docx=export_docx,
-                export_pdf=False,
-                temporary_dir=work,
-            )
-            if not calibrate or docx_path is None:
-                break
-            measured_pages = _libreoffice_page_count(docx_path, work)
-            if measured_pages is None or measured_pages == get_target_pages(raw_exam):
-                break
-            next_scale = spacing_scale_for_target(
-                raw_exam,
-                measured_pages=measured_pages,
-                current_scale=scale,
-            )
-            if abs(next_scale - scale) < 0.0001:
-                break
-            scale = next_scale
-    finally:
-        target_layout.unlink(missing_ok=True)
-    if docx_path is not None:
+        output.mkdir(parents=True, exist_ok=True)
+    except PermissionError as exc:
+        raise ExportDestinationError(target) from exc
+    # Keep the completed staging file on the destination volume so the final
+    # replacement remains atomic even when the application and export folder
+    # are on different drives.
+    staging_parent = output if export_docx else work
+    try:
+        staging_context = TemporaryDirectory(prefix="exam-export-", dir=staging_parent)
+    except PermissionError as exc:
+        raise ExportDestinationError(target) from exc
+    with staging_context as staging_folder:
+        render_output = Path(staging_folder) if export_docx else output
+        docx_path: Path | None = None
+        try:
+            for _iteration in range(6 if calibrate else 1):
+                adjusted_exam = deepcopy(raw_exam)
+                adjusted_exam.setdefault("metadata", {})["page_spacing_scale"] = scale
+                _adjust_inline_spacing(adjusted_exam, scale)
+                target_layout.write_text(
+                    _dump_yaml(adjusted_layout(load_layout(layout_path), adjusted_exam)),
+                    encoding="utf-8",
+                )
+                docx_path, _unused_pdf, _unused_engine = _render_documents(
+                    adjusted_exam,
+                    target_layout,
+                    render_output,
+                    basename,
+                    template_path=template_path,
+                    export_docx=export_docx,
+                    export_pdf=False,
+                    temporary_dir=work,
+                )
+                if not calibrate or docx_path is None:
+                    break
+                measured_pages = _libreoffice_page_count(docx_path, work)
+                if measured_pages is None or measured_pages == get_target_pages(raw_exam):
+                    break
+                next_scale = spacing_scale_for_target(
+                    raw_exam,
+                    measured_pages=measured_pages,
+                    current_scale=scale,
+                )
+                if abs(next_scale - scale) < 0.0001:
+                    break
+                scale = next_scale
+        finally:
+            target_layout.unlink(missing_ok=True)
+        if docx_path is None:
+            return None, None, "docx-only"
         protect_inline_properties(docx_path)
-    return docx_path, None, "docx-only"
+        if not export_docx:
+            return None, None, "docx-only"
+        try:
+            docx_path.replace(target)
+        except PermissionError as exc:
+            raise ExportDestinationError(target) from exc
+        return target, None, "docx-only"
 
 
 def _libreoffice_page_count(docx_path: Path, work: Path) -> int | None:
@@ -250,4 +285,4 @@ def _yaml_scalar(value: Any) -> str:
     return text
 
 
-__all__ = ["build_documents"]
+__all__ = ["ExportDestinationError", "build_documents"]

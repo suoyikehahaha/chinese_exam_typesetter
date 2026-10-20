@@ -6,9 +6,11 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from app.current_importer import import_exam
-from app.current_pipeline import build_documents
+from app.current_pipeline import ExportDestinationError, build_documents
 from app.internal_preview_primitives import render_internal_preview
 from app.office_bridge import engine_summary
 from app.page_target import get_target_pages, spacing_scale_for_target
@@ -56,6 +58,61 @@ class WordWorkflowTests(unittest.TestCase):
             self.assertIsNone(pdf)
             self.assertEqual(engine, "docx-only")
             self.assertFalse((Path(folder) / "exam.pdf").exists())
+
+    def test_export_replaces_existing_file_only_after_render_finishes(self) -> None:
+        raw = json.loads((ROOT / "samples" / "exam.json").read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "exam.docx"
+            target.write_bytes(b"previous version")
+            docx, _pdf, _engine = build_documents(
+                raw, ROOT / "templates" / "layout.yaml", folder, "exam"
+            )
+            self.assertEqual(docx, target)
+            self.assertTrue(target.read_bytes().startswith(b"PK"))
+            self.assertFalse(list(Path(folder).glob("exam-export-*")))
+
+    def test_locked_destination_keeps_previous_file_and_reports_action(self) -> None:
+        raw = json.loads((ROOT / "samples" / "exam.json").read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "exam.docx"
+            target.write_bytes(b"previous version")
+            original_replace = Path.replace
+
+            def deny_target(path: Path, destination: Path) -> Path:
+                if Path(destination) == target:
+                    raise PermissionError(13, "Permission denied", str(target))
+                return original_replace(path, destination)
+
+            with patch.object(Path, "replace", deny_target):
+                with self.assertRaises(ExportDestinationError) as caught:
+                    build_documents(raw, ROOT / "templates" / "layout.yaml", folder, "exam")
+            self.assertEqual(target.read_bytes(), b"previous version")
+            self.assertIn("Word 或 WPS", str(caught.exception))
+            self.assertIn("换一个文件名", str(caught.exception))
+            self.assertFalse(list(Path(folder).glob("exam-export-*")))
+
+    def test_desktop_locked_file_prompt_can_retry_same_destination(self) -> None:
+        from desktop_app import CurrentDesktopApp
+
+        target = Path("D:/题库/语文试题（排版）.docx")
+        app = SimpleNamespace(
+            _export_in_progress=True,
+            busy=True,
+            busy_bar=Mock(),
+            status_var=Mock(),
+            after=Mock(),
+            start_export=Mock(),
+        )
+        error = ExportDestinationError(target)
+        with patch("desktop_app.messagebox.askretrycancel", return_value=True) as prompt:
+            CurrentDesktopApp._finish_export(app, error)
+        self.assertFalse(app.busy)
+        self.assertFalse(app._export_in_progress)
+        self.assertIn("关闭目标文件", prompt.call_args.args[1])
+        delay, callback = app.after.call_args.args
+        self.assertEqual(delay, 100)
+        callback()
+        app.start_export.assert_called_once_with(target.parent, target.stem, True, False)
 
     def test_engine_probe_does_not_launch_office(self) -> None:
         summary = engine_summary()

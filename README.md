@@ -6,7 +6,7 @@
 
 这是一个面向高中语文教师的 Windows 试卷排版工具。软件把已有 Word 试题识别为卷首、阅读模块、材料、题目、选择项、诗歌、作文和答案等结构，再按预设的高中语文试卷规范统一排版。
 
-当前版本为 **0.1.4**，面向 Windows 64 位系统。
+当前版本为 **0.1.5**，面向 Windows 64 位系统。
 
 [下载 Windows EXE](https://github.com/suoyikehahaha/chinese_exam_typesetter/releases/latest) · [更新记录](CHANGELOG.md) · [开发与发布](docs/development.md) · [反馈问题](https://github.com/suoyikehahaha/chinese_exam_typesetter/issues/new/choose)
 
@@ -21,14 +21,20 @@
 | 独立参考答案 | 单独识别答案题号、解析和评分说明，不按整卷150分校验 |
 | 试题后附答案 | 区分题面与答案内容，按顺序生成同一份DOCX |
 
-## 0.1.4 更新重点
+## 0.1.5 更新重点
+
+- 修复目标 DOCX 已在 Word 或 WPS 中打开时直接显示 `[Errno 13] Permission denied` 的问题。
+- 导出改为先生成完整临时文件，再原子替换目标文件；替换失败时保留原文件，不留下损坏或未完成的 DOCX。
+- 文件被占用或目录不可写时，显示中文原因与处理办法，可在关闭目标文件后直接重试，也可取消后更换文件名。
+
+0.1.4 中的局部训练、独立答案、导入与预览优化均保留：
 
 - 修复独立答案误识别、同段连续答案未拆分及部分内容遗漏。
 - 修复卷首注意事项遗漏、默写小题跨段错序，保留相关下划线。
 - 补充题内后段分值和单题板块分值识别；明确不计分的附加题与正式总分分开。
 - 改善双诗结构识别及加粗宋体预览，延续后台导入、预览缓存和过期任务取消。
 
-本机回归测试共127项通过，另完成六份真实文档的EXE导入、预览、导出检查。真实试卷原件不随源码分发；缺少这些原件时，相应本地集成测试会跳过。完整记录见[更新记录](CHANGELOG.md)。
+本机回归测试共130项通过，另完成六份真实文档的EXE导入、预览、导出检查。真实试卷原件不随源码分发；缺少这些原件时，相应本地集成测试会跳过。完整记录见[更新记录](CHANGELOG.md)。
 
 ![软件主界面](docs/software-interface.png)
 
@@ -81,11 +87,11 @@
 
 请在 [GitHub Releases](https://github.com/suoyikehahaha/chinese_exam_typesetter/releases/latest) 下载最新 Windows 版本。
 
-发布资产中的 `ChineseExamTypesetter_0.1.4.exe` 是便携程序，GitHub 自动生成的 “Source code” 压缩包供开发者使用，不是安装包。运行环境面向 Windows 10/11 64 位，本轮验证在 Windows 11 完成。
+发布资产中的 `ChineseExamTypesetter_0.1.5.exe` 是便携程序，GitHub 自动生成的 “Source code” 压缩包供开发者使用，不是安装包。运行环境面向 Windows 10/11 64 位，本轮验证在 Windows 11 完成。
 
 DOCX 的读取、预览和导出不要求安装 Microsoft Office 或 WPS。导入旧版 `.doc` 时，软件会按需调用本机的 Word 或 WPS 进行转换。请安装宋体、黑体、楷体、仿宋；缺失字体或预览替代会提示核对，不建议带着字体警告直接印刷。
 
-发布页同时提供 `SHA256SUMS.txt`。可用 `Get-FileHash .\ChineseExamTypesetter_0.1.4.exe -Algorithm SHA256` 核对下载文件。遇到系统安全提示时请先核对下载来源和校验值，不要关闭系统安全防护。
+发布页同时提供 `SHA256SUMS.txt`。可用 `Get-FileHash .\ChineseExamTypesetter_0.1.5.exe -Algorithm SHA256` 核对下载文件。遇到系统安全提示时请先核对下载来源和校验值，不要关闭系统安全防护。
 
 ## 当前范围
 

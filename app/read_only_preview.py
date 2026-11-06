@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+from hashlib import sha256
+from io import BytesIO
 import tkinter as tk
 from tkinter import ttk
 from typing import Any, Hashable, Mapping
@@ -23,6 +25,9 @@ class ReadOnlyPreview(EditableA4Canvas):
         self._image_labels: list[tk.Label] = []
         self._visible_photos: dict[int, ImageTk.PhotoImage] = {}
         self._page_sizes: list[tuple[int, int]] = []
+        self._page_fingerprints: list[str] = []
+        self.changed_pages: set[int] = set()
+        self._page_captions: list[tk.Label] = []
         super().__init__(*args, **kwargs)
         self.canvas.bind("<Configure>", self._fit_on_resize, add="+")
         scrollbar_set = self.canvas.cget("yscrollcommand")
@@ -44,12 +49,16 @@ class ReadOnlyPreview(EditableA4Canvas):
         ttk.Button(controls, text="上一页", command=self.previous_page).pack(side=tk.LEFT)
         self.page_number_var = tk.StringVar(value="1")
         entry = ttk.Entry(controls, textvariable=self.page_number_var, width=4, justify=tk.CENTER)
+        self.page_number_entry = entry
         entry.pack(side=tk.LEFT, padx=5)
         entry.bind("<Return>", self._go_to_page)
         ttk.Button(controls, text="下一页", command=self.next_page).pack(side=tk.LEFT)
         ttk.Button(controls, text="适合宽度", command=self.fit_width).pack(side=tk.RIGHT)
         ttk.Button(controls, text="放大", command=lambda: self.change_zoom(0.08)).pack(side=tk.RIGHT, padx=5)
         ttk.Button(controls, text="缩小", command=lambda: self.change_zoom(-0.08)).pack(side=tk.RIGHT)
+        self.update_message_var = tk.StringVar(master=self, value="预览页数为估算；整卷设置会影响所有页面。")
+        ttk.Label(self, textvariable=self.update_message_var, foreground="#245D8C", wraplength=600).pack(
+            fill=tk.X, pady=(0, 6))
 
     def _go_to_page(self, _event=None):
         try:
@@ -125,18 +134,30 @@ class ReadOnlyPreview(EditableA4Canvas):
         actual_pages: int | None = None,
         raw_exam: dict[str, Any] | None = None,
         selected_key: Hashable | None = None,
-    ) -> None:
+    ) -> bool:
         """Load rendered pages and retain both block and object locators."""
 
-        previous_view = self._capture_view()
+        previous_view = self._capture_page_position()
+        paths = [Path(page) for page in pages]
+        sizes, fingerprints = [], []
+        try:
+            for path in paths:
+                payload = path.read_bytes()
+                fingerprints.append(sha256(payload).hexdigest())
+                with Image.open(BytesIO(payload)) as source:
+                    sizes.append(source.size)
+        except OSError as exc:
+            detail = exc.strerror or str(exc)
+            self.update_message_var.set(f"预览图片“{path.name}”无法读取：{detail}。请点击“应用并查看”重新生成预览。")
+            return False
+        self.changed_pages = {index for index, value in enumerate(fingerprints)
+                              if index >= len(self._page_fingerprints) or value != self._page_fingerprints[index]}
+        self._page_fingerprints = fingerprints
         self._clear_position_marker()
         self._image_preview = True
         self._rendering = True
-        self.preview_pages = [Path(page) for page in pages]
-        self._page_sizes = []
-        for path in self.preview_pages:
-            with Image.open(path) as source:
-                self._page_sizes.append(source.size)
+        self.preview_pages = paths
+        self._page_sizes = sizes
         if self._fit_enabled and self._page_sizes and self.canvas.winfo_width() > 50:
             self.zoom = max(0.25, min(1.35, (self.canvas.winfo_width() - 44) / self._page_sizes[0][0]))
         self.locators = dict(locators or {})
@@ -148,6 +169,7 @@ class ReadOnlyPreview(EditableA4Canvas):
         self.page_frames.clear()
         self.block_pages.clear()
         self._image_labels.clear()
+        self._page_captions.clear()
         self._visible_photos.clear()
         self.preview_image_refs.clear()
         for index, size in enumerate(self._page_sizes):
@@ -155,6 +177,7 @@ class ReadOnlyPreview(EditableA4Canvas):
             holder.pack(pady=(14, 8))
             caption = tk.Label(holder, text=f"第 {index + 1} 页", background="#EDF2F8", foreground="#6A7C90", font=("Microsoft YaHei UI", 9))
             caption.pack(anchor=tk.W, pady=(0, 5))
+            self._page_captions.append(caption)
             page = tk.Frame(holder, background="white", width=round(size[0] * self.zoom) + 2,
                             height=round(size[1] * self.zoom) + 2, highlightbackground="#CDD7E4", highlightthickness=1)
             page.pack()
@@ -175,14 +198,64 @@ class ReadOnlyPreview(EditableA4Canvas):
         self._last_scrollregion = None
         self._queue_layout_sync()
         if previous_view is not None:
-            self._restore_view(previous_view)
+            self._restore_page_position(previous_view)
         self._queue_visible_pages()
+        return True
+
+    def _scroll_to_y(self, y: float) -> None:
+        """Tk expects a fraction of the full scroll region, not the free range."""
+        self.update_idletasks()
+        bbox = self.canvas.bbox("all")
+        if not bbox:
+            return
+        self._update_scrollregion()
+        extent = max(1.0, float(bbox[3] - bbox[1]))
+        viewport = max(1, self.canvas.winfo_height())
+        fraction = max(0.0, min(max(0.0, 1.0 - viewport / extent), (y - bbox[1]) / extent))
+        self.canvas.yview_moveto(fraction)
+
+    def _capture_page_position(self):
+        if not self.page_frames:
+            return None
+        index = self.current_page()
+        holder = self.page_frames[index].master
+        relative = (self.canvas.canvasy(0) - holder.winfo_y()) / max(1, holder.winfo_height())
+        return index, relative
+
+    def _restore_page_position(self, position) -> None:
+        if self._scroll_after:
+            self.after_cancel(self._scroll_after)
+        self._scroll_after = self.after(30, lambda: self._apply_page_position(position))
+
+    def _apply_page_position(self, position) -> None:
+        self._scroll_after = None
+        if not self.page_frames:
+            return
+        index = max(0, min(position[0], len(self.page_frames) - 1))
+        self.update_idletasks()
+        holder = self.page_frames[index].master
+        self._scroll_to_y(holder.winfo_y() + position[1] * max(1, holder.winfo_height()))
+
+    def show_page_update(self, page_index: int, message: str) -> None:
+        if not self.page_frames:
+            return
+        if self._scroll_after:
+            self.after_cancel(self._scroll_after)
+            self._scroll_after = None
+        page_index = max(0, min(page_index, len(self.page_frames) - 1))
+        self._scroll_page(page_index)
+        for index, page in enumerate(self.page_frames):
+            active = index == page_index
+            page.configure(highlightbackground="#2472B8" if active else "#CDD7E4",
+                           highlightthickness=2 if active else 1)
+            label = f"第 {index + 1} 页" + (" · 正在核对" if active else "")
+            self._page_captions[index].configure(text=label)
+        self.update_message_var.set(message)
 
     def _update_status(self, page_index: int) -> None:
         self.status_variable.set(f"{page_index + 1} / {max(1, len(self.page_frames))} 页 · {round(self.zoom * 100)}%")
-        if hasattr(self, "page_number_var") and self.focus_get() is not None:
-            if not isinstance(self.focus_get(), ttk.Entry):
-                self.page_number_var.set(str(page_index + 1))
+        if hasattr(self, "page_number_var") and self.focus_get() is not self.page_number_entry:
+            self.page_number_var.set(str(page_index + 1))
 
     def current_page(self) -> int:
         if not self.page_frames:

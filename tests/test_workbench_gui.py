@@ -180,3 +180,159 @@ def test_preview_only_allocates_visible_page_images(app, tmp_path):
     preview._load_visible_pages()
     assert len(preview.page_frames) == 12
     assert 1 <= len(preview.preview_image_refs) <= 4
+
+
+def preview_pages(tmp_path, name, changed=False):
+    from PIL import Image, ImageDraw
+    folder = tmp_path / name
+    folder.mkdir()
+    pages = []
+    for index in range(3):
+        path = folder / f'page-{index}.png'
+        image = Image.new('RGB', (794, 1123), 'white')
+        if changed and index == 2:
+            ImageDraw.Draw(image).rectangle((100, 100, 600, 130), fill='black')
+        image.save(path)
+        pages.append(path)
+    return pages
+
+
+def finish_settings_preview(app, pages):
+    from copy import deepcopy
+    from app.preview_service import PreviewResult
+    app._preview_generation += 1
+    app._preview_settings_feedback = deepcopy(app._settings_feedback)
+    app._finish_preview(PreviewResult(app._preview_generation, tuple(pages), 'internal', {}, 8, len(pages), 1))
+
+
+def test_global_panel_is_compact_and_scope_is_clear(app):
+    select_question(app)
+    app.inspector_tabs.select(2)
+    app.update()
+    assert app.inspector_tabs.tab(2, 'text') == '整卷'
+    assert app.selection_title_var.get() == '整卷设置 · 影响所有页面'
+    app.header_settings_group.set_expanded(False)
+    assert not app.header_settings_group.body.winfo_manager()
+    assert app.global_group.winfo_reqheight() < 360
+    assert app.apply_page_settings_button.cget('text') == '应用并查看'
+    app.inspector_tabs.select(1)
+    app.update()
+    assert '影响所有页面' not in app.selection_title_var.get()
+
+
+def test_natural_pagination_hides_page_count_and_retains_model(app):
+    app.pagination_mode_var.set('自然分页')
+    app._pagination_mode_changed()
+    assert app.target_pages_var.get() == '0'
+    assert not app.target_pages_entry.winfo_manager()
+    assert app._commit_global_settings(show_error=False)
+    assert app.raw_exam['metadata']['target_pages'] == 0
+    app.pagination_mode_var.set('目标页数')
+    app._pagination_mode_changed()
+    assert app.target_pages_entry.winfo_manager() == 'pack'
+    assert app.target_pages_var.get() == '8'
+
+
+def test_applying_margins_returns_to_viewed_page_and_reports_visible_change(app, tmp_path):
+    preview = app.document_editor
+    preview.set_preview_pages(preview_pages(tmp_path, 'before'))
+    with patch.object(preview, 'current_page', return_value=2):
+        app.margin_left_var.set('28')
+        assert app._commit_global_settings(show_error=False)
+    assert app._settings_feedback['page'] == 2
+    with patch.object(preview, '_scroll_page') as scroll:
+        finish_settings_preview(app, preview_pages(tmp_path, 'after', changed=True))
+        scroll.assert_called_with(2)
+    assert '第 3 页画面已更新' in app.page_settings_status_var.get()
+    assert preview.update_message_var.get() == app.page_settings_status_var.get()
+
+
+def test_unchanged_preview_is_reported_honestly(app, tmp_path):
+    preview = app.document_editor
+    pages = preview_pages(tmp_path, 'same')
+    preview.set_preview_pages(pages)
+    with patch.object(preview, 'current_page', return_value=1):
+        app._queue_settings_feedback()
+    with patch.object(preview, '_scroll_page'):
+        finish_settings_preview(app, pages)
+    assert '第 2 页画面无变化' in app.page_settings_status_var.get()
+
+
+def test_missing_preview_keeps_previous_pages_and_settings_for_retry(app, tmp_path):
+    preview = app.document_editor
+    pages = preview_pages(tmp_path, 'retained')
+    finish_settings_preview(app, pages)
+    fingerprints = list(preview._page_fingerprints)
+    app._queue_settings_feedback()
+    with patch('desktop_app.messagebox.showerror') as error:
+        finish_settings_preview(app, [tmp_path / 'expired.png'])
+    assert preview.preview_pages == pages
+    assert app.preview_pages == pages
+    assert preview._page_fingerprints == fingerprints
+    assert app._settings_feedback is not None
+    assert '更新失败' in app.page_settings_status_var.get()
+    assert '重试' in app.page_settings_status_var.get()
+    assert 'expired.png' in error.call_args.args[1]
+    assert '重新生成' in error.call_args.args[1]
+
+
+def test_header_edit_goes_to_first_page(app, tmp_path):
+    preview = app.document_editor
+    pages = preview_pages(tmp_path, 'header')
+    preview.set_preview_pages(pages)
+    with patch.object(preview, 'current_page', return_value=2):
+        app.exam_name_var.set('修改后卷名')
+        assert app._commit_global_settings(show_error=False)
+    with patch.object(preview, '_scroll_page') as scroll:
+        finish_settings_preview(app, pages)
+        scroll.assert_called_with(0)
+    assert '已定位卷首' in app.page_settings_status_var.get()
+
+
+def test_page_navigation_uses_entire_canvas_extent(app):
+    preview = app.document_editor
+    with patch.object(preview, 'update_idletasks'), patch.object(preview, '_update_scrollregion'), \
+         patch.object(preview.canvas, 'bbox', return_value=(0, 0, 800, 4000)), \
+         patch.object(preview.canvas, 'winfo_height', return_value=800), \
+         patch.object(preview.canvas, 'yview_moveto') as move:
+        preview._scroll_to_y(2000)
+        move.assert_called_with(0.5)
+
+
+def test_page_anchor_survives_different_page_count(app, tmp_path):
+    preview = app.document_editor
+    preview.set_preview_pages(preview_pages(tmp_path, 'anchor'))
+    holder = preview.page_frames[1].master
+    with patch.object(preview, 'current_page', return_value=1), \
+         patch.object(holder, 'winfo_y', return_value=1100), \
+         patch.object(holder, 'winfo_height', return_value=1100), \
+         patch.object(preview.canvas, 'canvasy', return_value=1375):
+        anchor = preview._capture_page_position()
+    assert anchor == (1, 0.25)
+    with patch.object(preview, 'update_idletasks'), patch.object(holder, 'winfo_y', return_value=1500), \
+         patch.object(holder, 'winfo_height', return_value=1500), patch.object(preview, '_scroll_to_y') as scroll:
+        preview._apply_page_position(anchor)
+        scroll.assert_called_with(1875)
+
+
+def test_new_global_edit_discards_queued_old_preview(app):
+    from types import SimpleNamespace
+    ticket = app._preview_ticket
+    app.busy = True
+    app._ui_messages.put(('preview', ticket, SimpleNamespace(generation=app._preview_generation)))
+    app.margin_top_var.set('27')
+    with patch.object(app, '_finish_preview') as finish:
+        app._poll_ui_messages()
+        finish.assert_not_called()
+    assert '等待更新' in app.page_settings_status_var.get()
+
+
+def test_page_counter_updates_while_editing_global_fields(app):
+    preview = app.document_editor
+    with patch.object(preview, 'focus_get', return_value=app.target_pages_entry):
+        preview._update_status(2)
+    assert preview.page_number_var.get() == '3'
+    preview.page_number_var.set('7')
+    with patch.object(preview, 'focus_get', return_value=preview.page_number_entry):
+        preview._update_status(2)
+    assert preview.page_number_var.get() == '7'

@@ -21,7 +21,7 @@ def build_workbench_shell(app) -> None:
     app.file_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=16)
     app.export_button = ttk.Button(toolbar, text="导出 Word…", command=app.open_export_dialog, style="Primary.TButton")
     app.export_button.pack(side=tk.RIGHT)
-    ttk.Button(toolbar, text="页面设置", command=app.show_page_settings).pack(side=tk.RIGHT, padx=(6, 12))
+    ttk.Button(toolbar, text="整卷设置", command=app.show_page_settings).pack(side=tk.RIGHT, padx=(6, 12))
 
     app.main_pane = ttk.Panedwindow(app, orient=tk.HORIZONTAL)
     app.main_pane.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 8))

@@ -47,6 +47,7 @@ from app.inspector_model import (
 )
 from app.layout_presets import DEFAULT_PRESET, PRESET_LABELS, preset_page
 from app.page_layout import adjusted_layout
+from app.page_settings import DocumentSettingsPanel, build_page_settings
 from app.preview_service import PreviewResult, PreviewService
 from app.read_only_preview import ReadOnlyPreview
 from app.score_summary import TARGET_SCORE, ScoreSummary, calculate_score_summary, format_score, parse_score
@@ -195,6 +196,8 @@ class CurrentDesktopApp(LegacyWorkbench):
         self._preview_ticket = 0
         self._saved_signature = ""
         self._global_invalid = False
+        self._settings_feedback: dict[str, Any] | None = None
+        self._preview_settings_feedback: dict[str, Any] | None = None
         self._project_path: Path | None = None
         self._last_export_path: Path | None = None
         self._export_signature = ""
@@ -614,6 +617,9 @@ class CurrentDesktopApp(LegacyWorkbench):
         self.busy = True
         self.busy_bar.start(12)
         self.status_var.set("正在生成预览，请稍候…")
+        self._preview_settings_feedback = deepcopy(self._settings_feedback)
+        if self._preview_settings_feedback is not None:
+            self._set_settings_message("设置已应用，正在更新预览…")
         try:
             self._preview_generation = self._preview_service.submit(
                 raw,
@@ -654,6 +660,8 @@ class CurrentDesktopApp(LegacyWorkbench):
         self.busy = False
         self.busy_bar.stop()
         self.status_var.set("任务失败，请查看提示")
+        if self._settings_feedback is not None:
+            self._set_settings_message("预览更新失败；设置已保留，点击“应用并查看”重试。")
         try:
             messagebox.showerror(APP_TITLE, str(error), parent=self)
         except tk.TclError:
@@ -903,7 +911,7 @@ class CurrentDesktopApp(LegacyWorkbench):
         ).pack(anchor=tk.W, pady=(5, 5))
         self.inspector_tabs = ttk.Notebook(inspector_panel)
         self.inspector_tabs.pack(fill=tk.X, pady=(0, 6))
-        for label in ("内容", "格式", "页面"):
+        for label in ("内容", "格式", "整卷"):
             self.inspector_tabs.add(ttk.Frame(self.inspector_tabs, height=1), text=label)
         self.inspector_tabs.bind("<<NotebookTabChanged>>", self._inspector_tab_changed)
         shell = ttk.Frame(inspector_panel)
@@ -946,12 +954,7 @@ class CurrentDesktopApp(LegacyWorkbench):
             expanded=False,
             reset_command=lambda: self._restore_group("pagination"),
         )
-        self.global_group = CollapsibleGroup(
-            self.detail_frame,
-            "整卷设置",
-            expanded=True,
-            reset_command=lambda: self._restore_group("global"),
-        )
+        self.global_group = DocumentSettingsPanel(self.detail_frame)
         self._all_groups = (
             self.content_group,
             self.font_group,
@@ -1150,42 +1153,29 @@ class CurrentDesktopApp(LegacyWorkbench):
         ttk.Checkbutton(parent, text="当前对象前分页", variable=self.page_break_var).pack(anchor=tk.W, pady=(5, 0))
 
     def _build_global_group(self, parent: ttk.Frame) -> None:
-        self._global_entry(parent, 0, "试卷名称", self.exam_name_var)
-        self._global_entry(parent, 1, "科目名称", self.subject_name_var)
-        self._global_entry(parent, 2, "试卷说明", self.exam_meta_var)
-        self._global_entry(parent, 3, "目标页数", self.target_pages_var, width=8, hint="0 为自然分页；整卷默认 8 页")
-        ttk.Label(parent, text="排版模板").grid(row=4, column=0, sticky=tk.W, pady=3)
-        self.template_label = ttk.Label(parent, textvariable=self.layout_preset_var)
-        self.template_label.grid(row=4, column=1, sticky=tk.W, padx=(7, 6), pady=3)
-        ttk.Separator(parent).grid(row=5, column=0, columnspan=3, sticky=tk.EW, pady=8)
-        ttk.Label(parent, text="页边距（毫米）", font=("Microsoft YaHei UI", 9, "bold")).grid(
-            row=6, column=0, columnspan=3, sticky=tk.W, pady=(0, 5)
-        )
-        margins = ttk.Frame(parent)
-        margins.grid(row=7, column=0, columnspan=3, sticky=tk.EW)
-        for column, (label, variable) in enumerate(
-            (("上", self.margin_top_var), ("下", self.margin_bottom_var), ("左", self.margin_left_var), ("右", self.margin_right_var))
-        ):
-            ttk.Label(margins, text=label).grid(row=0, column=column * 2, sticky=tk.W)
-            ttk.Spinbox(margins, textvariable=variable, from_=5, to=45, increment=1, width=6).grid(
-                row=0, column=column * 2 + 1, sticky=tk.W, padx=(3, 8)
-            )
-        ttk.Separator(parent).grid(row=8, column=0, columnspan=3, sticky=tk.EW, pady=8)
-        ttk.Label(parent, text="已内置您提供的高考真题模板，导入后自动应用。", style="EditorHint.TLabel", wraplength=390).grid(
-            row=9, column=0, columnspan=3, sticky=tk.W
-        )
-        parent.columnconfigure(1, weight=1)
+        build_page_settings(self, parent, CollapsibleGroup)
 
-        self.document_scope_var = tk.StringVar(master=self, value="全卷")
-        ttk.Label(parent, text="文档类型").grid(row=11, column=0, sticky=tk.W, pady=5)
-        scope_box = ttk.Combobox(parent, textvariable=self.document_scope_var, values=("全卷", "局部训练"), state="readonly", width=14)
-        scope_box.grid(row=11, column=1, sticky=tk.W, padx=7)
-        scope_box.bind("<<ComboboxSelected>>", self._scope_changed)
+    def _pagination_mode_changed(self, _event=None) -> None:
+        if self.pagination_mode_var.get() == "自然分页":
+            self.target_pages_var.set("0")
+        else:
+            self.target_pages_var.set("8")
+        self._sync_pagination_mode()
+
+    def _sync_pagination_mode(self) -> None:
+        if "pagination_mode_var" not in self.__dict__:
+            return
+        natural = self.target_pages_var.get().strip() == "0"
+        self.pagination_mode_var.set("自然分页" if natural else "目标页数")
+        if natural:
+            self.target_pages_entry.pack_forget()
+            self.target_pages_suffix.pack_forget()
+        else:
+            self.target_pages_entry.pack(side=tk.LEFT, padx=(10, 4))
+            self.target_pages_suffix.pack(side=tk.LEFT)
 
     def _scope_changed(self, _event=None) -> None:
-        self._push_direct_history()
         practice = self.document_scope_var.get() == "局部训练"
-        self.raw_exam.setdefault("metadata", {})["document_scope"] = "practice" if practice else "full_exam"
         self.target_pages_var.set("0" if practice else "8")
         self._commit_global_settings(show_error=True)
         self._refresh_score_display()
@@ -1296,6 +1286,12 @@ class CurrentDesktopApp(LegacyWorkbench):
             elif self.raw_exam["blocks"][item.block_index].get("type") == "question":
                 groups.add("选择项")
         self._show_groups(groups)
+        if selected == 2:
+            self.selection_title_var.set("整卷设置 · 影响所有页面")
+        elif self.selected_block_index is not None:
+            self.selection_title_var.set(self._block_label(self.raw_exam["blocks"][self.selected_block_index])[:40])
+        else:
+            self.selection_title_var.set("卷首信息")
         self.detail_canvas.yview_moveto(0)
 
     def show_page_settings(self) -> None:
@@ -1919,6 +1915,10 @@ class CurrentDesktopApp(LegacyWorkbench):
             return
         if self._global_commit_after:
             self.after_cancel(self._global_commit_after)
+        self._sync_pagination_mode()
+        self._set_settings_message("设置已修改，正在等待更新…")
+        if self.busy:
+            self._cancel_preview()
         self._global_commit_after = self.after(600, lambda: self._commit_global_settings(show_error=False))
 
     def _commit_global_settings(self, *, show_error: bool) -> bool:
@@ -1939,6 +1939,7 @@ class CurrentDesktopApp(LegacyWorkbench):
                 raise ValueError("页边距应在 5 到 45 毫米之间。")
         except ValueError as exc:
             self._global_invalid = True
+            self._set_settings_message(str(exc))
             if show_error:
                 messagebox.showerror(APP_TITLE, str(exc), parent=self)
             return False
@@ -1948,10 +1949,13 @@ class CurrentDesktopApp(LegacyWorkbench):
                    "subject_name": self.subject_name_var.get().strip(),
                    "meta_text": self.exam_meta_var.get().strip(), "target_pages": target_pages,
                    "layout_preset": DEFAULT_PRESET,
+                   "document_scope": "practice" if self.document_scope_var.get() == "局部训练" else "full_exam",
                    "page_overrides": margins}
         if all(metadata.get(key) == value for key, value in updates.items()):
             return True
         self._push_direct_history()
+        header_changed = any(metadata.get(key, "") != updates[key] for key in ("exam_name", "subject_name", "meta_text"))
+        self._queue_settings_feedback(header_changed=header_changed)
         metadata.update(updates)
         metadata.pop("page_spacing_scale", None)
         if self.selected_content_object is not None and self.selected_content_object.block_index is None:
@@ -1961,12 +1965,33 @@ class CurrentDesktopApp(LegacyWorkbench):
             self._populate_object_tree()
             if self.selected_content_object is not None:
                 self._load_content_object(self.selected_content_object)
-        self.status_var.set("整卷设置已同步。")
+        self._set_settings_message("设置已应用，正在更新预览…")
         self._schedule_canvas_preview()
         return True
 
     def apply_global_settings(self) -> None:
-        self._commit_global_settings(show_error=True)
+        if not self._commit_global_settings(show_error=True):
+            return
+        if self._settings_feedback is None:
+            self._queue_settings_feedback()
+        if self._canvas_preview_after:
+            self.after_cancel(self._canvas_preview_after)
+            self._canvas_preview_after = None
+        self.request_preview()
+
+    def _set_settings_message(self, message: str) -> None:
+        if "page_settings_status_var" in self.__dict__:
+            self.page_settings_status_var.set(message)
+        if "document_editor" in self.__dict__:
+            self.document_editor.update_message_var.set(message)
+
+    def _queue_settings_feedback(self, *, header_changed: bool = False) -> None:
+        if "document_editor" not in self.__dict__:
+            return
+        previous = self._settings_feedback or {}
+        header_changed = header_changed or bool(previous.get("header_changed"))
+        self._settings_feedback = {"page": 0 if header_changed else self.document_editor.current_page(),
+                                   "header_changed": header_changed}
 
     def _load_global_fields(self) -> None:
         self._global_invalid = False
@@ -1989,6 +2014,7 @@ class CurrentDesktopApp(LegacyWorkbench):
             self.margin_right_var.set(str(overrides.get("margin_right_mm", defaults.get("margin_right_mm", page.get("margin_right_mm", 31.75)))))
         finally:
             self.loading_fields = False
+        self._sync_pagination_mode()
 
     def apply_current_question(self, *, silent: bool = False) -> bool:
         self._commit_current_text(schedule_preview=False)
@@ -2090,20 +2116,37 @@ class CurrentDesktopApp(LegacyWorkbench):
         self.busy = False
         self.busy_bar.stop()
         object_locators = build_object_locators(self.raw_exam, result.locators)
-        self._preview_block_locators = dict(result.locators)
-        self.preview_pages = list(result.pages)
-        self.raw_exam.setdefault("metadata", {})["page_spacing_scale"] = result.spacing_scale
-        self.preview_page_index = min(self.preview_page_index, max(0, len(self.preview_pages) - 1))
         selected_key: object = self.selected_block_index
         if self.selected_content_object is not None:
             selected_key = self.selected_content_object.key
-        self.document_editor.set_preview_pages(
-            self.preview_pages,
+        loaded = self.document_editor.set_preview_pages(
+            list(result.pages),
             locators=object_locators,
             actual_pages=result.actual_pages,
             raw_exam=self.raw_exam,
             selected_key=selected_key,
         )
+        if not loaded:
+            self._finish_task_error(OSError(self.document_editor.update_message_var.get()))
+            return
+        self._preview_block_locators = dict(result.locators)
+        self.preview_pages = list(result.pages)
+        self.raw_exam.setdefault("metadata", {})["page_spacing_scale"] = result.spacing_scale
+        self.preview_page_index = min(self.preview_page_index, max(0, len(self.preview_pages) - 1))
+        feedback = self._preview_settings_feedback
+        if feedback is not None:
+            page_index = max(0, min(feedback["page"], len(result.pages) - 1))
+            changed = page_index in self.document_editor.changed_pages
+            visible = "画面已更新" if changed else "画面无变化"
+            message = f"整卷设置已应用 · 第 {page_index + 1} 页{visible}"
+            if feedback.get("header_changed"):
+                message += " · 已定位卷首"
+            elif not changed:
+                message += "，其他页面可能受影响"
+            self.document_editor.show_page_update(page_index, message)
+            self._set_settings_message(message)
+            self._settings_feedback = None
+            self._preview_settings_feedback = None
         document_kind = str(self.raw_exam.get("document_kind", "exam"))
         if document_kind == "exam_with_answer":
             self.status_var.set(
@@ -2522,6 +2565,9 @@ class CurrentDesktopApp(LegacyWorkbench):
         finally:
             self.loading_fields = False
         self.status_var.set("已恢复目标页数和页边距模板值。")
+        self._sync_pagination_mode()
+        self._queue_settings_feedback()
+        self._set_settings_message("已恢复模板值，正在更新预览…")
         self._schedule_canvas_preview()
 
     def _restore_options_group(self) -> None:
@@ -2757,6 +2803,9 @@ class CurrentDesktopApp(LegacyWorkbench):
         wait_closed()
 
     def _cancel_editor_timers(self) -> None:
+        self._settings_feedback = None
+        self._preview_settings_feedback = None
+        self._set_settings_message("修改后自动更新，也可点击应用并查看。")
         for name in ("_text_commit_after", "_global_commit_after", "_canvas_preview_after", "_search_after"):
             timer = getattr(self, name, None)
             if timer:

@@ -71,6 +71,7 @@ def wrap_rich_text(
     width: int,
     ranges: list[dict[str, Any]],
     first_width: int | None = None,
+    font_at: Any = None,
 ) -> list[tuple[str, int, int]]:
     """Wrap decorated text while retaining source positions and kinsoku rules."""
 
@@ -94,7 +95,7 @@ def wrap_rich_text(
         current_width = 0.0
         for relative, character in enumerate(raw_line):
             absolute = offset + relative
-            chosen = bold_font if active(absolute, "bold") else font
+            chosen = font_at(absolute) if font_at else (bold_font if active(absolute, "bold") else font)
             char_width = _character_width(draw, character, chosen)
             overflow = bool(current) and current_width + char_width > maximum
             if overflow and character in NO_LINE_START:

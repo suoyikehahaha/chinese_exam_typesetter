@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
-import re
 from tempfile import TemporaryDirectory
 from typing import Any
 from zipfile import ZipFile
@@ -20,15 +19,14 @@ from .chinese_typography import enable_chinese_typography
 from .config import load_layout
 from .exam_context_formatting import apply_exam_context_formatting
 from .exam_format_rules import apply_exam_format_rules
-from .exporters.pdf_exporter import PdfExporter
 from .header_extras import apply_header_extras
 from .header_normalization import apply_header_normalization
 from .inline_formatting import apply_inline_formats
 from .models import ExamDocument
 from .models.identity import ensure_block_ids
 from .native_docx_objects import restore_native_objects
-from .page_layout import adjusted_layout
-from .page_target import get_target_pages, spacing_scale_for_target
+from .page_layout import adjusted_layout, adjust_inline_spacing
+from .page_target import spacing_scale_for_target
 from .pagination import apply_pagination_guards
 from .paragraph_formatting import apply_paragraph_formats
 from .renderers import DocxRenderer
@@ -90,7 +88,7 @@ def _render_documents(
     docx_path = docx_dir / f"{basename}.docx"
 
     if raw_exam.get("document_kind") == "answer":
-        render_answer_docx(raw_exam, docx_path)
+        render_answer_docx(raw_exam, docx_path, layout=layout)
     else:
         exam_raw = deepcopy(raw_exam)
         exam_raw["blocks"] = exam_blocks(raw_exam)
@@ -127,13 +125,6 @@ def build_documents(
     work = Path(temporary_dir) if temporary_dir else output
     work.mkdir(parents=True, exist_ok=True)
     scale = spacing_scale_for_target(raw_exam)
-    calibrate = (
-        get_target_pages(raw_exam) > 0
-        and
-        raw_exam.get("document_kind") not in {"answer", "exam_with_answer"}
-        and "page_spacing_scale" in raw_exam.get("metadata", {})
-        and bool(raw_exam.get("metadata", {}).get("source_docx_path"))
-    )
     target = output / f"{basename}.docx"
     try:
         output.mkdir(parents=True, exist_ok=True)
@@ -153,37 +144,20 @@ def build_documents(
         render_output = Path(staging_folder) if export_docx else output
         docx_path: Path | None = None
         try:
-            for _iteration in range(6 if calibrate else 1):
-                adjusted_exam = deepcopy(prepare_profile_exam(raw_exam))
-                adjusted_exam.setdefault("metadata", {})["page_spacing_scale"] = scale
-                _adjust_inline_spacing(adjusted_exam, scale)
-                target_layout.write_text(
-                    _dump_yaml(adjusted_layout(load_layout(layout_path), adjusted_exam)),
-                    encoding="utf-8",
-                )
-                docx_path, _unused_pdf, _unused_engine = _render_documents(
-                    adjusted_exam,
-                    target_layout,
-                    render_output,
-                    basename,
-                    template_path=template_path,
-                    export_docx=export_docx,
-                    export_pdf=False,
-                    temporary_dir=task_work,
-                )
-                if not calibrate or docx_path is None:
-                    break
-                measured_pages = _libreoffice_page_count(docx_path, task_work)
-                if measured_pages is None or measured_pages == get_target_pages(raw_exam):
-                    break
-                next_scale = spacing_scale_for_target(
-                    raw_exam,
-                    measured_pages=measured_pages,
-                    current_scale=scale,
-                )
-                if abs(next_scale - scale) < 0.0001:
-                    break
-                scale = next_scale
+            # Export the rhythm already shown in the preview. A second Office
+            # calibration here changed the user's final layout without review.
+            adjusted_exam = deepcopy(prepare_profile_exam(raw_exam))
+            adjusted_exam.setdefault("metadata", {})["page_spacing_scale"] = scale
+            adjust_inline_spacing(adjusted_exam, scale)
+            target_layout.write_text(
+                _dump_yaml(adjusted_layout(load_layout(layout_path), adjusted_exam)),
+                encoding="utf-8",
+            )
+            docx_path, _unused_pdf, _unused_engine = _render_documents(
+                adjusted_exam, target_layout, render_output, basename,
+                template_path=template_path, export_docx=export_docx,
+                export_pdf=False, temporary_dir=task_work,
+            )
         finally:
             target_layout.unlink(missing_ok=True)
         if docx_path is None:
@@ -201,21 +175,6 @@ def build_documents(
         return target, None, "docx-only"
 
 
-def _libreoffice_page_count(docx_path: Path, work: Path) -> int | None:
-    """Measure a temporary PDF when LibreOffice is available; never expose it."""
-
-    target = work / "page-count.pdf"
-    try:
-        PdfExporter._export_with_libreoffice(docx_path, target)
-        data = target.read_bytes()
-        count = len(re.findall(rb"/Type\s*/Page\b", data))
-        return count or None
-    except Exception:  # noqa: BLE001 - LibreOffice remains an optional helper
-        return None
-    finally:
-        target.unlink(missing_ok=True)
-
-
 def _run_exam_passes(docx_path: Path, raw_exam: dict[str, Any]) -> None:
     """Apply deterministic DOCX passes in one documented order."""
 
@@ -228,38 +187,6 @@ def _run_exam_passes(docx_path: Path, raw_exam: dict[str, Any]) -> None:
     apply_exam_context_formatting(docx_path, raw_exam)
     apply_segmentation_formatting(docx_path)
     restore_source_decorations(docx_path, raw_exam)
-
-
-def _adjust_inline_spacing(raw_exam: dict[str, Any], scale: float) -> None:
-    """Apply a bounded rhythm change to explicit paragraph overrides."""
-
-    for block in raw_exam.get("blocks", []):
-        specs: list[dict[str, Any]] = []
-        if block.get("type") == "question":
-            question = block.get("question", {})
-            if isinstance(question.get("format"), dict):
-                specs.append(question["format"])
-            specs.extend(
-                item
-                for item in question.get("paragraph_formats", [])
-                if isinstance(item, dict)
-            )
-        specs.extend(
-            item
-            for item in block.get("paragraph_formats", [])
-            if isinstance(item, dict)
-        )
-        if isinstance(block.get("format"), dict):
-            specs.append(block["format"])
-        for spec in specs:
-            if "line_spacing" in spec:
-                spec["line_spacing"] = max(
-                    0.95,
-                    min(1.8, float(spec["line_spacing"]) * scale),
-                )
-            for key in ("space_before_pt", "space_after_pt"):
-                if key in spec:
-                    spec[key] = max(0.0, float(spec[key]) * scale)
 
 
 def _dump_yaml(data: dict[str, Any]) -> str:

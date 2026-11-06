@@ -29,6 +29,12 @@ def apply_answer_overrides(
                 paragraph = _find_exact(document, text)
                 if paragraph is not None:
                     _apply(paragraph, spec)
+        for entry in block.get("paragraph_formats", []):
+            line = int(entry.get("target_index", 0))
+            if 0 <= line < len(lines):
+                paragraph = _find_exact(document, lines[line])
+                if paragraph is not None:
+                    _apply(paragraph, entry)
         for entry in block.get("inline_formats", []):
             line = int(entry.get("line", entry.get("target_index", 0)))
             if line < 0 or line >= len(lines):
@@ -38,8 +44,8 @@ def apply_answer_overrides(
                 continue
             _format_range(
                 paragraph,
-                int(entry.get("start", 0)),
-                int(entry.get("end", 0)),
+                int(entry.get("start", 0)) + int(entry.get("text_offset", 0)),
+                int(entry.get("end", 0)) + int(entry.get("text_offset", 0)),
                 FONT_NAMES.get(
                     str(entry.get("font", "")),
                     str(entry.get("font", "")),

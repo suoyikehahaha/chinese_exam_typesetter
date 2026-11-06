@@ -246,6 +246,8 @@ def _run_startup_test(module: object, output: Path) -> int:
             "editable_objects": len(app._content_objects),
             "inspector_tabs": len(app.inspector_tabs.tabs()),
             "reference_template_available": "national_ii_2026" in module.PRESET_LABELS,
+            "default_template": app.raw_exam.get("metadata", {}).get("layout_preset"),
+            "template_is_fixed_label": app.template_label.winfo_class() == "TLabel",
             "drop_enabled": bool(app.drop_enabled),
             "update_address_input_removed": not hasattr(module, "UpdateSettingsDialog")
             and not hasattr(app, "open_update_settings"),

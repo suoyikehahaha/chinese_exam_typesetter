@@ -14,7 +14,8 @@ from docx.oxml.ns import qn
 from PIL import Image, ImageDraw, ImageFont
 
 from .config import load_layout
-from .internal_preview_primitives import _font, _wrap_text
+from .font_resolver import load_preview_font as _font
+from .chinese_line_break import wrap_plain_text as _wrap_text
 from .page_layout import adjusted_layout
 from .page_target import get_target_pages
 from .preview_cancellation import check_cancelled
@@ -23,6 +24,9 @@ from .font_resolver import font_substitution_notice
 from .paragraph_identity import paragraph_identity
 from .reference_profile import is_reference_profile
 from .source_document import source_document
+from .preview_formatting import preview_format
+from .paragraph_formatting import _option_spec
+from .answer_typesetting import answer_titles
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,47 +128,10 @@ def _load_source_visuals(raw_exam: dict[str, Any]) -> _SourceVisuals:
 
 
 def _mark_active(ranges: list[dict[str, Any]], position: int, key: str) -> bool:
-    return any(
-        int(mark.get("start", 0)) <= position < int(mark.get("end", 0))
-        and bool(mark.get(key))
-        for mark in ranges
-    )
-
-
-def _wrap_rich_text(
-    draw: ImageDraw.ImageDraw,
-    text: str,
-    font: ImageFont.ImageFont,
-    bold_font: ImageFont.ImageFont,
-    width: int,
-    ranges: list[dict[str, Any]],
-) -> list[tuple[str, int, int]]:
-    """Wrap text while retaining source character positions for decorations."""
-
-    result: list[tuple[str, int, int]] = []
-    offset = 0
-    for raw_line in str(text).splitlines() or [""]:
-        if not raw_line:
-            result.append(("", offset, offset))
-            offset += 1
-            continue
-        current: list[str] = []
-        current_width = 0.0
-        line_start = offset
-        for position, character in enumerate(raw_line):
-            absolute = offset + position
-            chosen = bold_font if _mark_active(ranges, absolute, "bold") else font
-            character_width = draw.textlength(character, font=chosen)
-            if current and current_width + character_width > width:
-                result.append(("".join(current), line_start, absolute))
-                current = []
-                current_width = 0.0
-                line_start = absolute
-            current.append(character)
-            current_width += character_width
-        result.append(("".join(current), line_start, offset + len(raw_line)))
-        offset += len(raw_line) + 1
-    return result
+    for mark in reversed(ranges):
+        if key in mark and int(mark.get("start", 0)) <= position < int(mark.get("end", 0)):
+            return bool(mark[key])
+    return False
 
 
 def _draw_rich_line(
@@ -176,6 +143,7 @@ def _draw_rich_line(
     font: ImageFont.ImageFont,
     bold_font: ImageFont.ImageFont,
     ranges: list[dict[str, Any]],
+    font_at: Any = None,
 ) -> None:
     """Draw a line with source bold, underline and emphasis marks."""
 
@@ -185,13 +153,14 @@ def _draw_rich_line(
     segment_bold = False
     segment_underline = False
     segment_emphasis = False
+    segment_font = font
 
     def flush() -> None:
         nonlocal cursor, segment
         if not segment:
             return
         value = "".join(segment)
-        chosen = bold_font if segment_bold else font
+        chosen = segment_font
         draw.text((cursor, y), value, fill="#111111", font=chosen, stroke_width=getattr(chosen, "preview_stroke_width", 0))
         width = draw.textlength(value, font=chosen)
         if segment_underline:
@@ -212,10 +181,12 @@ def _draw_rich_line(
         bold = _mark_active(ranges, position, "bold")
         underline = _mark_active(ranges, position, "underline")
         emphasis = _mark_active(ranges, position, "emphasis")
-        if segment and (bold, underline, emphasis) != (segment_bold, segment_underline, segment_emphasis):
+        chosen = font_at(position) if font_at else (bold_font if bold else font)
+        if segment and (chosen, bold, underline, emphasis) != (segment_font, segment_bold, segment_underline, segment_emphasis):
             flush()
         if not segment:
             segment_bold, segment_underline, segment_emphasis = bold, underline, emphasis
+            segment_font = chosen
         segment.append(character)
         position += 1
     flush()
@@ -308,7 +279,8 @@ def render_internal_preview(
         indent_chars: float | None = None,
         align: str | None = None,
         after: float = 0,
-    ) -> None:
+        measure: bool = False,
+    ) -> float | None:
         nonlocal y
         spec = dict(layout.get("styles", {}).get(role, layout.get("styles", {}).get("material_body", {})))
         check_cancelled()
@@ -323,7 +295,7 @@ def render_internal_preview(
             font_notices.add(notice)
         line_spacing = float(spec.get("line_spacing", layout.get("defaults", {}).get("body_line_spacing", 1.25)))
         line_height = max(14, int((font.size * line_spacing + 3) * _WORD_LINE_BOX_FACTOR))
-        if is_reference_profile(raw_exam):
+        if is_reference_profile(raw_exam) and role in {"exam_meta", "objective_stem", "subjective_stem", "choice_option"}:
             indent_chars = None
             align = None
         indent = float(spec.get("first_line_indent_chars", 0) if indent_chars is None else indent_chars)
@@ -339,10 +311,14 @@ def render_internal_preview(
             text_left += abs(indent_px)
         text_right = right - int(float(spec.get("right_indent_chars", 0)) * size_pt * point_px)
         alignment = str((override or {}).get("alignment", align or spec.get("alignment", "left")))
-        if spec.get("page_break_before") and page is not None and y > top:
+        if not measure and spec.get("page_break_before") and page is not None and y > top:
             new_page()
-        y += int(float(spec.get("space_before_pt", 0)) * point_px)
+        space_before = int(float(spec.get("space_before_pt", 0)) * point_px)
+        if not measure:
+            y += space_before
         source_images = source_visuals.images_for(text)
+        if not source_images and _NATIVE_DRAWING_RE.fullmatch(str(text).strip()):
+            raise ValueError("预览无法读取原文件中的图片或表格。请恢复原文件的位置，或重新导入该文档。")
         if source_images and _NATIVE_DRAWING_RE.fullmatch(str(text).strip()):
             if page is None:
                 new_page()
@@ -357,10 +333,36 @@ def render_internal_preview(
         marks = source_visuals.marks_for(text)
         if spec.get("bold_prefix_length"):
             marks.append({"start": 0, "end": int(spec["bold_prefix_length"]), "bold": True})
+        marks.extend(spec.get("_inline_formats", []))
         drawing = draw or ImageDraw.Draw(Image.new("RGB", (1, 1)))
         bold_font = _font(font_name, size_pt, True) if any(mark.get("bold") for mark in marks) else font
         if marks and (notice := font_substitution_notice(font_name, bold_font)):
             font_notices.add(notice)
+        styled_fonts = {}
+        for mark in marks:
+            name = str(mark.get("font") or font_name)
+            size = float(mark.get("size_pt", size_pt))
+            bold = bool(mark.get("bold", semantic_bold))
+            key = (name, size, bold)
+            if key not in styled_fonts:
+                styled_fonts[key] = _font(name, size, bold)
+                if notice := font_substitution_notice(name, styled_fonts[key]):
+                    font_notices.add(notice)
+        def font_at(position):
+            name, size, bold = font_name, size_pt, semantic_bold
+            for mark in marks:
+                if int(mark.get("start", 0)) <= position < int(mark.get("end", 0)):
+                    name = str(mark.get("font") or name)
+                    size = float(mark.get("size_pt", size))
+                    bold = bool(mark.get("bold", bold))
+            key = (name, size, bold)
+            if key not in styled_fonts:
+                styled_fonts[key] = _font(name, size, bold)
+            return styled_fonts[key]
+        if styled_fonts:
+            line_height = max(line_height, int((max(f.size for f in styled_fonts.values()) * line_spacing + 3) * _WORD_LINE_BOX_FACTOR))
+        if spec.get("line_height_pt"):
+            line_height = float(spec["line_height_pt"]) * point_px
         if marks:
             line_infos = wrap_rich_text(
                 drawing,
@@ -370,6 +372,7 @@ def render_internal_preview(
                 text_right - text_left,
                 marks,
                 first_width=text_right - text_left - indent_px,
+                font_at=font_at,
             )
         else:
             line_infos = [
@@ -378,6 +381,8 @@ def render_internal_preview(
             ]
         if not line_infos:
             line_infos = [("", 0, 0)]
+        if measure:
+            return space_before + len(line_infos) * line_height + int(float(spec.get("space_after_pt", 0)) * point_px + after)
         if page is None:
             new_page()
         # Reserve the next line for headings / explicit paragraph keep flags.
@@ -402,7 +407,7 @@ def render_internal_preview(
                 line_width = sum(
                     drawing.textlength(
                         character,
-                        font=(bold_font if _mark_active(marks, line_start + offset, "bold") else font),
+                        font=font_at(line_start + offset),
                     )
                     for offset, character in enumerate(line)
                 )
@@ -424,44 +429,96 @@ def render_internal_preview(
                         font,
                         bold_font,
                         marks,
+                        font_at,
                     )
                 else:
                     draw.text((x, y), line, fill="#111111", font=font, stroke_width=getattr(font, "preview_stroke_width", 0))
             y += line_height
         if source_images:
             draw_source_images(source_images)
-        y += int(float(spec.get("space_after_pt", 0)) * 1.3 + after)
+        y += int(float(spec.get("space_after_pt", 0)) * point_px + after)
 
     def add_mixed(block_index: int, segments: Iterable[dict[str, Any]], override: dict[str, Any] | None = None) -> None:
-        add_entry(block_index, "".join(str(item.get("text", "")) for item in segments), "embedded_body", override=override, indent_chars=2)
+        segments = list(segments)
+        spec = dict(override or {})
+        ranges, position = [], 0
+        for item in segments:
+            value = str(item.get("text", ""))
+            if item.get("role") == "label" and not spec.get("font"):
+                ranges.append({"start": position, "end": position + len(value), "font": "SimSun"})
+            position += len(value)
+        spec["_inline_formats"] = ranges + spec.get("_inline_formats", [])
+        add_entry(block_index, "".join(str(item.get("text", "")) for item in segments), "embedded_body", override=spec, indent_chars=2)
+
+    def add_columns(block_index, entries):
+        nonlocal left, right, y
+        outer_left, outer_right = left, right
+        middle = (left + right) // 2
+        for start in range(0, len(entries), 2):
+            row = entries[start:start + 2]
+            heights = []
+            for column, (text, spec) in enumerate(row):
+                left, right = (outer_left, middle) if column == 0 else (middle, outer_right)
+                cursors = dict(source_visuals.decoration_cursor), dict(source_visuals.image_cursor)
+                heights.append(add_entry(block_index, text, "choice_option", override=spec, measure=True) or 0)
+                source_visuals.decoration_cursor, source_visuals.image_cursor = cursors
+            left, right = outer_left, outer_right
+            if y > top and y + max(heights) > bottom:
+                new_page()
+            # Very long options cannot fit a single table row on the preview page.
+            if max(heights) > bottom - top:
+                font_notices.add("双列选项过长，预览按单列展开；导出仍保留双列")
+                for text, spec in row:
+                    add_entry(block_index, text, "choice_option", override=spec)
+                continue
+            row_y = y
+            for column, (text, spec) in enumerate(row):
+                left, right = (outer_left, middle) if column == 0 else (middle, outer_right)
+                y = row_y
+                add_entry(block_index, text, "choice_option", override=spec)
+            left, right, y = outer_left, outer_right, row_y + max(heights)
 
     new_page()
     metadata = raw_exam.get("metadata", {})
-    add_entry(-1, str(metadata.get("exam_name", "高中语文试卷")), "exam_name", align="center", after=4)
-    add_entry(-1, str(metadata.get("subject_name", "语　文")), "subject_name", align="center", after=4)
-    if str(metadata.get("meta_text", "")).strip():
-        add_entry(-1, str(metadata.get("meta_text", "")), "exam_meta", align="center", after=2)
-    for text in metadata.get("header_lines", []):
-        add_entry(-1, str(text), "exam_meta", align="center", after=2)
-    notices = [str(item) for item in metadata.get("notices", []) if str(item).strip()]
-    if notices:
-        add_entry(-1, "注意事项：", "notice_title", after=1)
-        for number, notice in enumerate(notices, start=1):
-            add_entry(-1, f"{number}．{notice}", "notice_body", indent_chars=2)
+    def add_answer_titles():
+        for title in answer_titles(raw_exam):
+            add_entry(-1, title, "exam_name", override={"font": "SimSun", "size_pt": 14, "bold": True,
+                                                      "alignment": "center", "line_height_pt": 23.5})
+    if raw_exam.get("document_kind") == "answer":
+        add_answer_titles()
+    else:
+        if str(metadata.get("confidentiality_text", "")).strip():
+            add_entry(-1, str(metadata["confidentiality_text"]), "notice_body", override={"first_line_indent_chars": 0})
+        add_entry(-1, str(metadata.get("exam_name", "高中语文试卷")), "exam_name", align="center", after=4)
+        add_entry(-1, str(metadata.get("subject_name", "语　文")), "subject_name", align="center", after=4)
+        if str(metadata.get("meta_text", "")).strip():
+            add_entry(-1, str(metadata.get("meta_text", "")), "exam_meta", align="center", after=2)
+        for text in metadata.get("header_lines", []):
+            add_entry(-1, str(text), "exam_meta", align="center", after=2)
+        notices = [str(item) for item in metadata.get("notices", []) if str(item).strip()]
+        if notices:
+            add_entry(-1, "注意事项：", "notice_title", after=1)
+            for number, notice in enumerate(notices, start=1):
+                add_entry(-1, f"{number}．{notice}", "notice_body", indent_chars=2)
 
     for index, block in enumerate(raw_exam.get("blocks", [])):
+        if block.get("_answer_start") and raw_exam.get("document_kind") != "answer":
+            if y > top:
+                new_page()
+            add_answer_titles()
         kind = str(block.get("type", ""))
         if kind == "section_title":
-            add_entry(index, str(block.get("text", "")), "section_title", after=3)
+            add_entry(index, str(block.get("text", "")), "section_title", after=3, override=preview_format(block, base=block.get("format")))
         elif kind == "subsection":
-            prefix = {"bold_prefix_length": len(str(block.get("name", "")))} if is_reference_profile(raw_exam) else None
+            prefix = {"bold_prefix_length": len(str(block.get("name", ""))), **block.get("format", {})}
+            prefix = preview_format(block, base=prefix)
             add_entry(index, f"{block.get('name', '')}{block.get('meta', '')}", "subsection", after=2, override=prefix)
         elif kind == "instruction":
-            add_entry(index, str(block.get("text", "")), "instruction", indent_chars=2)
+            add_entry(index, str(block.get("text", "")), "instruction", indent_chars=2, override=preview_format(block, base=block.get("format")))
         elif kind in {"material", "poetry"}:
             _material(block, index, add_entry)
         elif kind == "question":
-            _question(block.get("question", {}), index, add_entry, add_mixed)
+            _question(block.get("question", {}), index, add_entry, add_mixed, add_columns)
         elif kind == "page_break":
             new_page()
 
@@ -475,10 +532,9 @@ def render_internal_preview(
 
 def _material(block: dict[str, Any], index: int, add_entry: Callable[..., None]) -> None:
     base = block.get("format", {})
-    formats = {int(item.get("target_index", -1)): item for item in block.get("paragraph_formats", []) if isinstance(item, dict)}
     offset = int(bool(block.get("title"))) + int(bool(block.get("author")))
     def format_at(position):
-        return {**base, **formats.get(position, {})}
+        return preview_format(block, index=position, base=base)
     if block.get("title"):
         title = str(block["title"])
         title_align = "left" if _MATERIAL_LABEL_RE.fullmatch(title) else "center"
@@ -491,7 +547,7 @@ def _material(block: dict[str, Any], index: int, add_entry: Callable[..., None])
         text = str(value)
         role = roles[paragraph_index] if paragraph_index < len(roles) else "body"
         if _MATERIAL_LABEL_RE.fullmatch(text):
-            add_entry(index, text, "material_title", align="left", after=1)
+            add_entry(index, text, "material_title", align="left", after=1, override=formats.get(paragraph_index))
         elif role in {"source", "publication_note"} or re.match(r"^\s*[（(].*(?:摘|选|译|发表于|有删改|有改动).*[）)]\s*$", text):
             add_entry(index, text, "material_source", align="right", override=formats.get(paragraph_index))
         elif role == "author":
@@ -501,38 +557,38 @@ def _material(block: dict[str, Any], index: int, add_entry: Callable[..., None])
         else:
             add_entry(index, text, "material_body", indent_chars=2, override=formats.get(paragraph_index))
     if block.get("note"):
-        add_entry(index, str(block["note"]), "material_note", indent_chars=2)
+        add_entry(index, str(block["note"]), "material_note", indent_chars=2, override=format_at(offset + len(block.get("paragraphs", []))))
     if block.get("source"):
-        add_entry(index, str(block["source"]), "material_source", align="right")
+        add_entry(index, str(block["source"]), "material_source", align="right", override=format_at(offset + len(block.get("paragraphs", [])) + int(bool(block.get("note")))))
 
 
-def _question(question: dict[str, Any], index: int, add_entry: Callable[..., None], add_mixed: Callable[..., None]) -> None:
+def _question(question: dict[str, Any], index: int, add_entry: Callable[..., None], add_mixed: Callable[..., None], add_columns=None) -> None:
     kind = str(question.get("kind", "subjective"))
     role = "objective_stem" if kind == "objective" else "subjective_stem"
     spec = question.get("format") if isinstance(question.get("format"), dict) else None
-    formats = {(entry.get("target", "stem"), int(entry.get("target_index", 0))): entry for entry in question.get("paragraph_formats", [])}
-    def format_for(target, position=0, base=None):
-        return {**(base or {}), **formats.get((target, position), {})}
+    def format_for(target, position=0, base=None, prefix=0):
+        return preview_format(question, target, position, base=base, prefix=prefix)
     score = question.get("score")
     suffix = ""
     if score is not None:
         value = float(score)
         suffix = f"（{int(value) if value.is_integer() else value}分）"
-    add_entry(index, f"{question.get('number', '')}．{question.get('stem', '')}{suffix}", role, override=format_for('stem', base=spec), indent_chars=0 if kind == "objective" else 1.5, after=1)
-    option_spec = {
-        "font": question.get("format", {}).get("option_font"),
-        "size_pt": question.get("format", {}).get("option_size_pt"),
-        "left_indent_chars": question.get("format", {}).get("option_left_indent_chars"),
-        "first_line_indent_chars": -float(question.get("format", {}).get("option_hanging_indent_chars", 1.7)),
-    } if isinstance(question.get("format"), dict) else None
-    for position, option in enumerate(question.get("options", [])):
-        add_entry(index, str(option), "choice_option", override=format_for('option', position, option_spec), indent_chars=1.5)
+    prefix = f"{question.get('number', '')}．"
+    add_entry(index, f"{prefix}{question.get('stem', '')}{suffix}", role, override=format_for('stem', base=spec, prefix=len(prefix)), indent_chars=0 if kind == "objective" else 1.5, after=1)
+    option_spec = _option_spec(question.get("format", {}))
+    options = [(str(option), format_for('option', position, option_spec)) for position, option in enumerate(question.get("options", []))]
+    if question.get("option_layout") == "two_column" and add_columns:
+        add_columns(index, options)
+    else:
+        for option, option_format in options:
+            add_entry(index, option, "choice_option", override=option_format, indent_chars=1.5)
     for position, segments in enumerate(question.get("embedded_segments", [])):
         add_mixed(index, segments, format_for('embedded', position))
     if question.get("segmentation_text"):
         add_entry(index, str(question["segmentation_text"]), "segmentation_text", indent_chars=2, override=format_for('segmentation'))
     for number, text in enumerate(question.get("subquestions", []), start=1):
-        add_entry(index, f"（{number}）{text}", "subquestion", indent_chars=2, override=format_for('subquestion', number - 1))
+        marker = f"（{number}）"
+        add_entry(index, marker + str(text), "subquestion", indent_chars=2, override=format_for('subquestion', number - 1, {"bold_prefix_length": len(marker)}, prefix=len(marker)))
     for key, role_name in (("composition_material", "composition_material"), ("composition_prompt", "composition_prompt"), ("composition_requirements", "composition_requirements")):
         for position, text in enumerate(question.get(key, [])):
             add_entry(index, str(text), role_name, indent_chars=2, override=format_for(key, position))

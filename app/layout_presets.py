@@ -6,9 +6,11 @@ from copy import deepcopy
 from typing import Any
 
 
+DEFAULT_PRESET = "national_ii_2026"
+
 PRESET_LABELS = {
     "national": "全国卷",
-    "national_ii_2026": "全国Ⅱ卷模板（2026）",
+    "national_ii_2026": "高考真题模板（内置）",
     "guangzhou": "广州卷",
     "source": "保留源版式",
 }
@@ -33,7 +35,7 @@ def preset_page(raw_exam: dict[str, Any], preset: str | None = None) -> dict[str
     """Return preset margins, using the imported first section for source mode."""
 
     metadata = raw_exam.get("metadata", {})
-    key = str(preset or metadata.get("layout_preset", "national"))
+    key = str(preset or metadata.get("layout_preset", DEFAULT_PRESET))
     if key == "source":
         source_page = metadata.get("source_page", {})
         if isinstance(source_page, dict) and all(name in source_page for name in _PAGE_PRESETS["national"]):
@@ -46,7 +48,9 @@ def apply_layout_preset(layout: dict[str, Any], raw_exam: dict[str, Any]) -> dic
 
     result = deepcopy(layout)
     metadata = raw_exam.get("metadata", {})
-    preset = str(metadata.get("layout_preset", "national"))
+    preset = str(metadata.get("layout_preset", DEFAULT_PRESET))
+    if preset not in PRESET_LABELS:
+        preset = DEFAULT_PRESET
     result.setdefault("page", {}).update(preset_page(raw_exam, preset))
     styles = result.setdefault("styles", {})
     if preset == "national_ii_2026":
@@ -74,4 +78,4 @@ def apply_layout_preset(layout: dict[str, Any], raw_exam: dict[str, Any]) -> dic
     return result
 
 
-__all__ = ["PRESET_LABELS", "apply_layout_preset", "preset_page"]
+__all__ = ["DEFAULT_PRESET", "PRESET_LABELS", "apply_layout_preset", "preset_page"]

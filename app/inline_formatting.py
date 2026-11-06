@@ -27,6 +27,8 @@ def apply_inline_formats(docx_path: str | Path, raw_exam: dict[str, Any]) -> Non
     target = Path(docx_path)
     document = Document(target)
     for block in raw_exam.get("blocks", []):
+        if str(block.get("type", "")).startswith("answer_"):
+            continue
         entries = (
             block.get("question", {}).get("inline_formats", [])
             if block.get("type") == "question"
@@ -58,7 +60,7 @@ def _format_range(
     if start >= end:
         return
     old_runs = list(paragraph.runs)
-    fragments: list[tuple[str, Any, bool]] = []
+    fragments: list[tuple[str | None, Any, bool]] = []
     cursor = 0
     for run in old_runs:
         text = run.text
@@ -79,10 +81,15 @@ def _format_range(
                 )
             )
         cursor = run_end
+        if run._r.xpath('./w:drawing | ./w:pict | ./w:object'):
+            fragments.append((None, run, False))
     for run in old_runs:
         paragraph._p.remove(run._r)
     for text, source_run, selected in fragments:
-        run = paragraph.add_run(text)
+        run = paragraph.add_run(text or "")
+        if text is None:
+            for element in source_run._r.xpath('./w:drawing | ./w:pict | ./w:object'):
+                run._r.append(deepcopy(element))
         if source_run._r.rPr is not None:
             run._r.insert(0, deepcopy(source_run._r.rPr))
         if selected:

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from math import floor
 import re
 from typing import Any, Mapping
+from .reference_profile import is_reference_profile
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,12 +276,11 @@ def format_owner(raw_exam: dict[str, Any], item: ContentObject) -> dict[str, Any
     return block.get("question", {}) if block.get("type") == "question" else block
 
 
-def paragraph_format_for(raw_exam: dict[str, Any], item: ContentObject) -> dict[str, Any]:
-    """Return the effective format for one object."""
-
-    owner = format_owner(raw_exam, item)
+def default_format_for_exam(raw_exam: dict[str, Any], item: ContentObject) -> dict[str, Any]:
+    """Return role defaults for the active document without user overrides."""
     default = default_format_for(item)
-    if raw_exam.get("metadata", {}).get("layout_preset") == "national_ii_2026":
+    default["indent_origin"] = "first_line"
+    if is_reference_profile(raw_exam):
         default["indent_origin"] = "paragraph"
         if item.role == "exam_meta":
             default.update(alignment="左对齐", special_indent="首行", special_indent_chars=2)
@@ -288,6 +288,18 @@ def paragraph_format_for(raw_exam: dict[str, Any], item: ContentObject) -> dict[
             default["font"] = "楷体"
         elif item.role == "question_stem":
             default.update(special_indent="无", special_indent_chars=0)
+        elif item.role in {"section_title", "material_title", "subject_name"}:
+            default["bold"] = False
+    default["first_line_indent_chars"] = default["special_indent_chars"] * (
+        1 if default["special_indent"] == "首行" else -1 if default["special_indent"] == "悬挂" else 0
+    )
+    return default
+
+
+def paragraph_format_for(raw_exam: dict[str, Any], item: ContentObject) -> dict[str, Any]:
+    """Return the effective format for one object."""
+    owner = format_owner(raw_exam, item)
+    default = default_format_for_exam(raw_exam, item)
     if owner is None:
         return default
     for entry in owner.get("paragraph_formats", []):
@@ -383,6 +395,7 @@ def set_inline_format(
             "target": target,
             "target_index": target_index,
             "line": item.line_index,
+            "text_offset": len(str(owner.get("name", ""))) if item.target == "meta" else 0,
             "start": start,
             "end": end,
             **dict(spec),
@@ -560,6 +573,7 @@ __all__ = [
     "build_object_locators",
     "content_objects_for_block",
     "default_format_for",
+    "default_format_for_exam",
     "format_owner",
     "inline_formats_for",
     "metadata_content_objects",

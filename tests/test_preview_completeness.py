@@ -54,7 +54,7 @@ class PreviewCompletenessTests(unittest.TestCase):
         )
         self.assertEqual(
             prepared["blocks"][1]["paragraphs"],
-            ["[[NATIVE_TABLE:0]]"],
+            ["[[ANSWER_TABLE:0]]"],
         )
 
     def test_renderer_locates_question_answer_and_table_blocks(self) -> None:
@@ -73,6 +73,7 @@ class PreviewCompletenessTests(unittest.TestCase):
                     "exam_name": "预览完整性测试",
                     "subject_name": "语　文",
                     "source_docx_path": str(source),
+                    "answer_source_docx_path": str(source),
                     "native_objects": [
                         {
                             "kind": "table",

@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 
 from app.current_importer import import_exam
 from app.current_pipeline import ExportDestinationError, build_documents
-from app.internal_preview_primitives import render_internal_preview
+from app.internal_preview import render_internal_preview
 from app.office_bridge import engine_summary
 from app.page_target import get_target_pages, spacing_scale_for_target
 

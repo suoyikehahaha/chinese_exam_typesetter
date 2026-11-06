@@ -45,7 +45,7 @@ from app.inspector_model import (
     set_paragraph_format,
     summary_text,
 )
-from app.layout_presets import PRESET_LABELS, preset_page
+from app.layout_presets import DEFAULT_PRESET, PRESET_LABELS, preset_page
 from app.page_layout import adjusted_layout
 from app.preview_service import PreviewResult, PreviewService
 from app.read_only_preview import ReadOnlyPreview
@@ -90,7 +90,6 @@ FONT_CHOICES = ("宋体", "黑体", "楷体", "仿宋")
 ALIGNMENT_CHOICES = ("左对齐", "居中", "右对齐", "两端对齐")
 SPECIAL_INDENTS = ("无", "首行", "悬挂")
 BATCH_SCOPES = ("当前题目", "当前大题", "整份试卷")
-LAYOUT_PRESET_KEYS = {label: key for key, label in PRESET_LABELS.items()}
 
 
 class CollapsibleGroup(ttk.Frame):
@@ -757,7 +756,7 @@ class CurrentDesktopApp(LegacyWorkbench):
     def _create_variables(self) -> None:
         super()._create_variables()
         self.target_pages_var = tk.StringVar(master=self, value="8")
-        self.layout_preset_var = tk.StringVar(master=self, value=PRESET_LABELS["national"])
+        self.layout_preset_var = tk.StringVar(master=self, value=PRESET_LABELS[DEFAULT_PRESET])
         self.search_var = tk.StringVar()
         self.warning_var = tk.StringVar()
         self.batch_scope_var = tk.StringVar(value="当前题目")
@@ -1155,16 +1154,9 @@ class CurrentDesktopApp(LegacyWorkbench):
         self._global_entry(parent, 1, "科目名称", self.subject_name_var)
         self._global_entry(parent, 2, "试卷说明", self.exam_meta_var)
         self._global_entry(parent, 3, "目标页数", self.target_pages_var, width=8, hint="0 为自然分页；整卷默认 8 页")
-        ttk.Label(parent, text="版式预设").grid(row=4, column=0, sticky=tk.W, pady=3)
-        preset_box = ttk.Combobox(
-            parent,
-            textvariable=self.layout_preset_var,
-            values=tuple(PRESET_LABELS.values()),
-            state="readonly",
-            width=14,
-        )
-        preset_box.grid(row=4, column=1, sticky=tk.W, padx=(7, 6), pady=3)
-        preset_box.bind("<<ComboboxSelected>>", self._preset_changed)
+        ttk.Label(parent, text="排版模板").grid(row=4, column=0, sticky=tk.W, pady=3)
+        self.template_label = ttk.Label(parent, textvariable=self.layout_preset_var)
+        self.template_label.grid(row=4, column=1, sticky=tk.W, padx=(7, 6), pady=3)
         ttk.Separator(parent).grid(row=5, column=0, columnspan=3, sticky=tk.EW, pady=8)
         ttk.Label(parent, text="页边距（毫米）", font=("Microsoft YaHei UI", 9, "bold")).grid(
             row=6, column=0, columnspan=3, sticky=tk.W, pady=(0, 5)
@@ -1179,14 +1171,9 @@ class CurrentDesktopApp(LegacyWorkbench):
                 row=0, column=column * 2 + 1, sticky=tk.W, padx=(3, 8)
             )
         ttk.Separator(parent).grid(row=8, column=0, columnspan=3, sticky=tk.EW, pady=8)
-        ttk.Label(parent, textvariable=self.template_status_var, foreground="#4B5563", wraplength=390).grid(
+        ttk.Label(parent, text="已内置您提供的高考真题模板，导入后自动应用。", style="EditorHint.TLabel", wraplength=390).grid(
             row=9, column=0, columnspan=3, sticky=tk.W
         )
-        buttons = ttk.Frame(parent)
-        buttons.grid(row=10, column=0, columnspan=3, sticky=tk.W, pady=(6, 0))
-        ttk.Button(buttons, text="选择母版…", command=self.import_template).pack(side=tk.LEFT)
-        ttk.Button(buttons, text="取消母版", command=self.use_default_template).pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Label(parent, text="母版保留页眉页脚等资源；正文格式由上方排版预设决定。", style="EditorHint.TLabel", wraplength=380).grid(row=12, column=0, columnspan=3, sticky=tk.W, pady=(6, 0))
         parent.columnconfigure(1, weight=1)
 
         self.document_scope_var = tk.StringVar(master=self, value="全卷")
@@ -1202,26 +1189,6 @@ class CurrentDesktopApp(LegacyWorkbench):
         self.target_pages_var.set("0" if practice else "8")
         self._commit_global_settings(show_error=True)
         self._refresh_score_display()
-
-    def _preset_changed(self, _event: object | None = None) -> None:
-        """Load the selected preset margins while preserving editable controls."""
-
-        if self.loading_fields:
-            return
-        key = LAYOUT_PRESET_KEYS.get(self.layout_preset_var.get(), "national")
-        margins = preset_page(self.raw_exam, key)
-        self.loading_fields = True
-        try:
-            self.margin_top_var.set(str(margins["margin_top_mm"]))
-            self.margin_bottom_var.set(str(margins["margin_bottom_mm"]))
-            self.margin_left_var.set(str(margins["margin_left_mm"]))
-            self.margin_right_var.set(str(margins["margin_right_mm"]))
-        finally:
-            self.loading_fields = False
-        self._commit_global_settings(show_error=False)
-
-        if self.selected_content_object is not None:
-            self._load_content_object(self.selected_content_object)
 
     @staticmethod
     def _global_entry(
@@ -1980,7 +1947,7 @@ class CurrentDesktopApp(LegacyWorkbench):
         updates = {"exam_name": self.exam_name_var.get().strip(),
                    "subject_name": self.subject_name_var.get().strip(),
                    "meta_text": self.exam_meta_var.get().strip(), "target_pages": target_pages,
-                   "layout_preset": LAYOUT_PRESET_KEYS.get(self.layout_preset_var.get(), "national"),
+                   "layout_preset": DEFAULT_PRESET,
                    "page_overrides": margins}
         if all(metadata.get(key) == value for key, value in updates.items()):
             return True
@@ -2005,14 +1972,14 @@ class CurrentDesktopApp(LegacyWorkbench):
         self._global_invalid = False
         self.loading_fields = True
         super()._load_global_fields()
-        metadata = self.raw_exam.get("metadata", {})
+        metadata = self.raw_exam.setdefault("metadata", {})
+        metadata["layout_preset"] = DEFAULT_PRESET
         page = load_layout(self.layout_path).get("page", {})
         overrides = metadata.get("page_overrides", {})
-        defaults = preset_page(self.raw_exam, str(metadata.get("layout_preset", "national")))
+        defaults = preset_page(self.raw_exam, DEFAULT_PRESET)
         self.loading_fields = True
         try:
-            preset_key = str(metadata.get("layout_preset", "national"))
-            self.layout_preset_var.set(PRESET_LABELS.get(preset_key, PRESET_LABELS["national"]))
+            self.layout_preset_var.set(PRESET_LABELS[DEFAULT_PRESET])
             self.target_pages_var.set(str(metadata.get("target_pages", 8)))
             if hasattr(self, "document_scope_var"):
                 self.document_scope_var.set("局部训练" if metadata.get("document_scope") == "practice" else "全卷")
@@ -2140,15 +2107,15 @@ class CurrentDesktopApp(LegacyWorkbench):
         document_kind = str(self.raw_exam.get("document_kind", "exam"))
         if document_kind == "exam_with_answer":
             self.status_var.set(
-                f"预览已更新：共 {result.actual_pages} 页；答案解析另计，不参与试题 {result.target_pages} 页校准"
+                f"预览估算 {result.actual_pages} 页（含答案）；打印分页以 Word 文档为准"
             )
         elif document_kind == "answer":
-            self.status_var.set(f"答案预览已更新：共 {result.actual_pages} 页")
+            self.status_var.set(f"答案预览估算 {result.actual_pages} 页；打印分页以 Word 文档为准")
         else:
             target_text = f"目标 {result.target_pages} 页" if result.target_pages else "自然分页"
             self.status_var.set(f"预览估算 {result.actual_pages} 页，{target_text}；打印分页以 Word 文档为准")
         if getattr(result, "warnings", ()):
-            self.warning_var.set("预览字体替代：" + "；".join(result.warnings) + "。请核对原字体是否已安装。")
+            self.warning_var.set("预览提示：" + "；".join(result.warnings))
         # Preserve the reader's viewport; explicit structure selection navigates.
 
     def _jump_to_block(self, block_index: int) -> None:
@@ -2506,7 +2473,7 @@ class CurrentDesktopApp(LegacyWorkbench):
             return
         self._push_direct_history()
         current = inspector_model.paragraph_format_for(self.raw_exam, item)
-        template = _release_default_format(item)
+        template = inspector_model.default_format_for_exam(self.raw_exam, item)
         if group == "font":
             keys = ("font", "size_pt", "bold")
         elif group == "pagination":
@@ -2522,6 +2489,7 @@ class CurrentDesktopApp(LegacyWorkbench):
                 "line_spacing",
                 "space_before_pt",
                 "space_after_pt",
+                "indent_origin",
             )
         for key in keys:
             current[key] = template[key]
@@ -2537,21 +2505,15 @@ class CurrentDesktopApp(LegacyWorkbench):
         if self._global_commit_after:
             self.after_cancel(self._global_commit_after)
             self._global_commit_after = None
-        page = load_layout(self.layout_path).get("page", {})
-        margins = {
-            "margin_top_mm": float(page.get("margin_top_mm", 20)),
-            "margin_bottom_mm": float(page.get("margin_bottom_mm", 18)),
-            "margin_left_mm": float(page.get("margin_left_mm", 22)),
-            "margin_right_mm": float(page.get("margin_right_mm", 18)),
-        }
+        margins = preset_page(self.raw_exam, DEFAULT_PRESET)
         metadata = self.raw_exam.setdefault("metadata", {})
         metadata["target_pages"] = 0 if metadata.get("document_scope") == "practice" else 8
-        metadata["layout_preset"] = "national"
+        metadata["layout_preset"] = DEFAULT_PRESET
         metadata["page_overrides"] = margins
         self.loading_fields = True
         try:
             if "layout_preset_var" in self.__dict__:
-                self.layout_preset_var.set(PRESET_LABELS["national"])
+                self.layout_preset_var.set(PRESET_LABELS[DEFAULT_PRESET])
             self.target_pages_var.set(str(metadata["target_pages"]))
             self.margin_top_var.set(str(margins["margin_top_mm"]).rstrip("0").rstrip("."))
             self.margin_bottom_var.set(str(margins["margin_bottom_mm"]).rstrip("0").rstrip("."))
@@ -2579,6 +2541,7 @@ class CurrentDesktopApp(LegacyWorkbench):
                 "option_size_pt": 10.5,
                 "option_left_indent_chars": 1.5,
                 "option_hanging_indent_chars": 1.7,
+                "option_indent_origin": "paragraph",
             }
         )
         self.loading_fields = True

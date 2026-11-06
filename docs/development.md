@@ -16,7 +16,7 @@
 | 内部页面预览 | `app/internal_preview.py`、`app/internal_preview_core.py`、`app/internal_preview_native.py` |
 | 版式与字体配置 | `templates/layout.yaml` |
 
-DOCX 处理不依赖办公软件。旧版 DOC 转换按需使用 Word/WPS；已安装 LibreOffice 时，导出流程可借助临时转换校准页数，临时 PDF 不作为用户输出。内部预览仍是估算，不能代替打印前核验。
+DOCX处理不依赖办公软件。旧版DOC转换按需使用Word/WPS；预览和导出共用段落调节参数，导出阶段不再调用LibreOffice重新校准行距。内部预览仍是估算，不能代替打印前核验。
 
 ## 验证要求
 
@@ -33,7 +33,7 @@ DOCX 处理不依赖办公软件。旧版 DOC 转换按需使用 Word/WPS；已�
 内部诊断模式可验证打包后的实际代码，不会自动打开编辑窗口：
 
 ```powershell
-$exe = (Resolve-Path '.\output\release\ChineseExamTypesetter_0.2.0.exe').Path
+$exe = (Resolve-Path '.\output\release\ChineseExamTypesetter_0.2.1.exe').Path
 $inputDoc = (Resolve-Path 'D:\测试目录\脱敏样例.docx').Path
 $diagnosticDir = (New-Item -ItemType Directory -Force '.\work').FullName
 foreach ($mode in @('import', 'preview', 'export')) {

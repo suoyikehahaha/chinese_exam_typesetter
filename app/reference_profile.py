@@ -11,12 +11,14 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Pt
+from .layout_presets import DEFAULT_PRESET, PRESET_LABELS
 
 PROFILE_KEY = "national_ii_2026"
 
 
 def is_reference_profile(raw: dict) -> bool:
-    return raw.get("metadata", {}).get("layout_preset") == PROFILE_KEY
+    key = raw.get("metadata", {}).get("layout_preset", DEFAULT_PRESET)
+    return key == PROFILE_KEY or key not in PRESET_LABELS
 
 
 def prepare_profile_exam(raw: dict) -> dict:
@@ -44,7 +46,12 @@ def apply_reference_profile(path: str | Path, raw: dict) -> None:
         str(block.get("name", "")) + str(block.get("meta", "")): len(str(block.get("name", "")))
         for block in raw.get("blocks", []) if block.get("type") == "subsection"
     }
-    for paragraph in document.paragraphs:
+    paragraphs = list(document.paragraphs)
+    for table in document.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                paragraphs.extend(cell.paragraphs)
+    for paragraph in paragraphs:
         role = paragraph.style.name.removeprefix("Exam_")
         fmt = paragraph.paragraph_format
         if role == "section_title":

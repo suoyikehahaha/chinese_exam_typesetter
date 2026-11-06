@@ -9,6 +9,31 @@ from app.preview_cancellation import check_cancelled
 
 
 class PreviewServicePerformanceTests(TestCase):
+    def test_answer_source_change_invalidates_preview_cache(self):
+        with TemporaryDirectory() as folder:
+            layout = Path(folder) / 'layout.yaml'
+            layout.write_text('styles: {}', encoding='utf-8')
+            source = Path(folder) / 'answer.docx'
+            source.write_bytes(b'first')
+            calls = []
+            def render(raw, layout_path, output):
+                calls.append(raw)
+                output.mkdir(parents=True)
+                page = output / 'page-1.png'
+                page.write_bytes(b'fixture')
+                return InternalPreviewResult((page,), {}, 0, 1)
+            service = PreviewService()
+            try:
+                with patch('app.preview_service.render_internal_preview', side_effect=render):
+                    for content in (b'first', b'updated answer table'):
+                        source.write_bytes(content)
+                        done = Event()
+                        service.submit({'metadata': {'target_pages': 0, 'answer_source_docx_path': str(source)}}, layout, None, lambda r: done.set())
+                        self.assertTrue(done.wait(5))
+                    self.assertEqual(len(calls), 2)
+            finally:
+                service.close()
+
     def test_identical_requests_reuse_images_but_return_new_generation(self):
         with TemporaryDirectory() as folder:
             layout = Path(folder) / 'layout.yaml'

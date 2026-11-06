@@ -66,6 +66,19 @@ def select_question(app, position=0):
     return app.raw_exam["blocks"][index]["question"]
 
 
+def test_reference_template_is_automatic_and_reset_uses_it(app):
+    from app.layout_presets import DEFAULT_PRESET, PRESET_LABELS
+    assert app.raw_exam["metadata"]["layout_preset"] == DEFAULT_PRESET
+    assert app.template_label.cget("textvariable") == str(app.layout_preset_var)
+    assert app.layout_preset_var.get() == PRESET_LABELS[DEFAULT_PRESET]
+    app.raw_exam["metadata"]["layout_preset"] = "guangzhou"
+    app._load_global_fields()
+    assert app.raw_exam["metadata"]["layout_preset"] == DEFAULT_PRESET
+    select_question(app)
+    app._restore_group("paragraph")
+    assert app.raw_exam["blocks"][app.selected_block_index]["question"]["format"]["special_indent"] == "无"
+
+
 def test_text_switch_and_undo_roundtrip(app):
     question = select_question(app)
     original = question["stem"]

@@ -32,6 +32,7 @@ from .answer_typesetting import (
     standalone_answer_model,
 )
 from .models.identity import ensure_block_ids
+from .layout_presets import DEFAULT_PRESET
 
 
 
@@ -1921,7 +1922,7 @@ def _parse_docx_payload(source: Path, original: Path) -> dict[str, Any]:
             "margin_left_mm": round(float(section.left_margin.mm), 2),
             "margin_right_mm": round(float(section.right_margin.mm), 2),
         }
-    metadata.setdefault("layout_preset", "national")
+    metadata.setdefault("layout_preset", DEFAULT_PRESET)
     return result
 
 

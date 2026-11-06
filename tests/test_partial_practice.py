@@ -80,7 +80,7 @@ class PartialPracticeTests(TestCase):
             finally:
                 service.close()
             raw['metadata']['page_spacing_scale'] = 1
-            with patch('app.current_pipeline._libreoffice_page_count', side_effect=AssertionError('practice must not calibrate')):
+            with patch('app.exporters.pdf_exporter.PdfExporter._export_with_libreoffice', side_effect=AssertionError('export must use preview spacing')):
                 output, _, _ = build_documents(raw, 'templates/layout.yaml', folder, 'partial')
             text = '\n'.join(p.text for p in Document(output).paragraphs)
             for value in ('限时训练一', '学而时习之', '李白', '低头思故乡', '17'):

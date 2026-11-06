@@ -308,11 +308,20 @@ def exam_blocks(raw_exam: dict[str, Any]) -> list[dict[str, Any]]:
 def render_answer_docx(
     raw_exam: dict[str, Any],
     output_path: str | Path,
+    *, layout: dict[str, Any] | None = None,
 ) -> Path:
     """Render a standalone answer in the Guangzhou reference layout."""
 
     document = Document()
     _configure_answer_page(document)
+    if layout:
+        page = layout.get("page", {})
+        for section in document.sections:
+            for key, attribute in (("margin_top_mm", "top_margin"), ("margin_bottom_mm", "bottom_margin"),
+                                   ("margin_left_mm", "left_margin"), ("margin_right_mm", "right_margin"),
+                                   ("header_distance_mm", "header_distance"), ("footer_distance_mm", "footer_distance")):
+                if key in page:
+                    setattr(section, attribute, Mm(page[key]))
     _render_answer_into(document, raw_exam, add_page_break=False)
     target = Path(output_path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -334,6 +343,17 @@ def append_answer_to_docx(
     document.save(target)
 
 
+def answer_titles(raw_exam: dict[str, Any]) -> list[str]:
+    metadata = raw_exam.get("metadata", {})
+    titles = list(metadata.get("answer_title_lines", []))
+    if raw_exam.get("document_kind") == "answer":
+        titles = [metadata.get("exam_name", titles[0] if titles else ""),
+                  metadata.get("subject_name", titles[1] if len(titles) > 1 else "")]
+    if not any(titles):
+        titles = [str(metadata.get("exam_name", "")).strip(), "语文试题参考答案及评分建议"]
+    return [str(title) for title in titles[:2] if str(title).strip()]
+
+
 def _render_answer_into(
     document: Any,
     raw_exam: dict[str, Any],
@@ -343,13 +363,7 @@ def _render_answer_into(
     if add_page_break and document.paragraphs:
         document.add_page_break()
     metadata = raw_exam.get("metadata", {})
-    titles = list(metadata.get("answer_title_lines", []))
-    if not titles:
-        titles = [
-            str(metadata.get("exam_name", "")).strip(),
-            "语文试题参考答案及评分建议",
-        ]
-    for title in titles[:2]:
+    for title in answer_titles(raw_exam):
         paragraph = _new_paragraph(document, 0, "center", 0, 0, Pt(23.5))
         _add_run(paragraph, str(title), "SimSun", 14, bold=True)
 
@@ -411,9 +425,8 @@ def _answer_role(
     return "subjective_answer", "answer"
 
 
-def _render_answer_paragraph(document: Any, entry: dict[str, Any]) -> None:
+def answer_paragraph_font(entry: dict[str, Any]) -> str:
     role = str(entry.get("role", "subjective_answer"))
-    text = str(entry.get("text", ""))
     style = {
         "objective_answer": ("SimSun", 10.5, False),
         "subjective_answer": ("KaiTi", 10.5, False),
@@ -428,6 +441,12 @@ def _render_answer_paragraph(document: Any, entry: dict[str, Any]) -> None:
         "analysis_label": ("SimHei", 10.5, False),
         "analysis_body": ("SimSun", 10.5, False),
     }.get(role, ("KaiTi", 10.5, False))
+    return style[0]
+
+
+def _render_answer_paragraph(document: Any, entry: dict[str, Any]) -> None:
+    role = str(entry.get("role", "subjective_answer"))
+    text = str(entry.get("text", ""))
     paragraph = _new_paragraph(document, 21, "left", 0, 0, Pt(17))
     prefix_end = 0
     if role == "mixed_answer":
@@ -437,8 +456,8 @@ def _render_answer_paragraph(document: Any, entry: dict[str, Any]) -> None:
         paragraph,
         text,
         entry.get("runs", []),
-        style[0],
-        style[1],
+        answer_paragraph_font(entry),
+        10.5,
         prefix_end=prefix_end,
     )
 

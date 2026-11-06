@@ -36,6 +36,8 @@ def apply_paragraph_formats(
     target = Path(docx_path)
     document = Document(target)
     for block in raw_exam.get("blocks", []):
+        if str(block.get("type", "")).startswith("answer_"):
+            continue
         if block.get("type") == "question":
             question = block.get("question", {})
             stem_paragraph = _find_question(document, int(question.get("number", 0)))
@@ -159,8 +161,8 @@ def _locate(
     if block.get("type") != "question":
         lines = _block_lines(block)
         return (
-            (_find_exact(document, lines[index]), 0)
-            if index < len(lines)
+            (_find_exact(document, lines[index]), int(entry.get("text_offset", 0)))
+            if 0 <= index < len(lines)
             else (None, 0)
         )
     question = block["question"]
@@ -211,7 +213,11 @@ def _block_lines(block: dict[str, Any]) -> list[str]:
 
 
 def _find_question(document: Any, number: int) -> Any | None:
+    # Notice lists can start with the same number as the first question.
+    semantic = any(p.style.name.startswith("Exam_") for p in document.paragraphs)
     for paragraph in document.paragraphs:
+        if semantic and paragraph.style.name not in {"Exam_objective_stem", "Exam_subjective_stem"}:
+            continue
         match = QUESTION_RE.match(paragraph.text.strip())
         if match and int(match.group(1)) == number:
             return paragraph

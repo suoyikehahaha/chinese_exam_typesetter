@@ -76,7 +76,7 @@ class PreviewRegressionTests(unittest.TestCase):
         self.assertEqual(metadata["exam_name"], "导入试卷名称")
         self.assertEqual(metadata["meta_text"], "导入说明")
         self.assertEqual(metadata["target_pages"], 8)
-        self.assertEqual(metadata["layout_preset"], "national")
+        self.assertEqual(metadata["layout_preset"], "national_ii_2026")
         self.assertEqual(metadata["page_overrides"]["margin_top_mm"], 25.4)
 
     def test_notice_item_is_not_used_as_exam_title(self) -> None:

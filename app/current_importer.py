@@ -10,6 +10,7 @@ from typing import Any
 
 from .flexible_importers import import_exam as import_exam_legacy
 from .models.identity import ensure_block_ids
+from .layout_presets import DEFAULT_PRESET
 from .office_bridge import convert_doc_to_docx
 
 
@@ -52,6 +53,7 @@ def import_exam(path: str | Path) -> dict[str, Any]:
         result = import_exam_legacy(source)
     ensure_block_ids(result)
     result.setdefault("metadata", {})["source_format"] = suffix[1:]
+    result["metadata"]["layout_preset"] = DEFAULT_PRESET
     diagnostics: list[dict[str, Any]] = list(result.get("diagnostics", []))
     _normalize_same_line_title_authors(result, diagnostics)
     _normalize_publication_notes(result)

@@ -68,11 +68,14 @@ class PreviewService:
         prepared = deepcopy(raw_exam)
         signature = deepcopy(prepared)
         signature.setdefault("metadata", {}).pop("page_spacing_scale", None)
-        source = Path(str(signature["metadata"].get("source_docx_path", "")))
-        source_stamp = None
-        if source.is_file():
-            stat = source.stat()
-            source_stamp = (stat.st_size, stat.st_mtime_ns)
+        source_stamp = []
+        for key in ("source_docx_path", "answer_source_docx_path"):
+            source = Path(str(signature["metadata"].get(key, "")))
+            try:
+                stat = source.stat() if source.is_file() else None
+            except OSError:
+                stat = None
+            source_stamp.append((key, stat.st_size, stat.st_mtime_ns) if stat else (key, None))
         cache_key = hashlib.sha256((json.dumps(signature, sort_keys=True, ensure_ascii=False) + repr(source_stamp)).encode("utf-8") + Path(layout_path).read_bytes()).hexdigest()
 
         def work() -> PreviewResult:

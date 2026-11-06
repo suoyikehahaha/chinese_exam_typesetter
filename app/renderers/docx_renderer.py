@@ -165,6 +165,8 @@ class DocxRenderer:
             self._paragraph(line, "poetry")
         if block.note:
             self._paragraph(block.note, "material_note")
+        if block.source:
+            self._paragraph(block.source, "material_source")
 
     def _question(self, question: Question | None) -> None:
         if question is None:

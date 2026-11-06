@@ -220,7 +220,8 @@ def _run_startup_test(module: object, output: Path) -> int:
         encoding="utf-8",
     )
     try:
-        app = module.CurrentDesktopApp()
+        app = module.CurrentDesktopApp(check_updates=False)
+        app.withdraw()
     except Exception as exc:
         output.write_text(
             json.dumps(
@@ -242,6 +243,9 @@ def _run_startup_test(module: object, output: Path) -> int:
             "tree": bool(app.tree.get_children("")),
             "preview_service": type(app._preview_service).__module__,
             "preview": type(app.document_editor).__name__,
+            "editable_objects": len(app._content_objects),
+            "inspector_tabs": len(app.inspector_tabs.tabs()),
+            "reference_template_available": "national_ii_2026" in module.PRESET_LABELS,
             "drop_enabled": bool(app.drop_enabled),
             "update_address_input_removed": not hasattr(module, "UpdateSettingsDialog")
             and not hasattr(app, "open_update_settings"),

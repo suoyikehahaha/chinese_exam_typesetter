@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 from tempfile import TemporaryDirectory
 from typing import Any
+from zipfile import ZipFile
 
 from .answer_overrides import apply_answer_overrides
 from .answer_typesetting import append_answer_to_docx, exam_blocks, render_answer_docx
@@ -32,6 +33,7 @@ from .pagination import apply_pagination_guards
 from .paragraph_formatting import apply_paragraph_formats
 from .renderers import DocxRenderer
 from .run_formatting import protect_inline_properties
+from .reference_profile import apply_reference_profile, prepare_profile_exam
 from .segmentation_formatting import apply_segmentation_formatting
 from .semantic_formatting import apply_semantic_formatting
 from .source_decorations import restore_source_decorations
@@ -100,6 +102,10 @@ def _render_documents(
 
     apply_answer_overrides(docx_path, raw_exam)
     apply_header_normalization(docx_path, raw_exam)
+    apply_reference_profile(docx_path, raw_exam)
+    if raw_exam.get("document_kind") != "answer":
+        apply_paragraph_formats(docx_path, raw_exam)
+        apply_inline_formats(docx_path, raw_exam)
 
     return (docx_path if export_docx else None), None, "docx-only"
 
@@ -120,7 +126,6 @@ def build_documents(
     output = Path(output_dir)
     work = Path(temporary_dir) if temporary_dir else output
     work.mkdir(parents=True, exist_ok=True)
-    target_layout = work / "layout-targeted.yaml"
     scale = spacing_scale_for_target(raw_exam)
     calibrate = (
         get_target_pages(raw_exam) > 0
@@ -143,11 +148,13 @@ def build_documents(
     except PermissionError as exc:
         raise ExportDestinationError(target) from exc
     with staging_context as staging_folder:
+        task_work = Path(staging_folder)
+        target_layout = task_work / "layout-targeted.yaml"
         render_output = Path(staging_folder) if export_docx else output
         docx_path: Path | None = None
         try:
             for _iteration in range(6 if calibrate else 1):
-                adjusted_exam = deepcopy(raw_exam)
+                adjusted_exam = deepcopy(prepare_profile_exam(raw_exam))
                 adjusted_exam.setdefault("metadata", {})["page_spacing_scale"] = scale
                 _adjust_inline_spacing(adjusted_exam, scale)
                 target_layout.write_text(
@@ -162,11 +169,11 @@ def build_documents(
                     template_path=template_path,
                     export_docx=export_docx,
                     export_pdf=False,
-                    temporary_dir=work,
+                    temporary_dir=task_work,
                 )
                 if not calibrate or docx_path is None:
                     break
-                measured_pages = _libreoffice_page_count(docx_path, work)
+                measured_pages = _libreoffice_page_count(docx_path, task_work)
                 if measured_pages is None or measured_pages == get_target_pages(raw_exam):
                     break
                 next_scale = spacing_scale_for_target(
@@ -182,6 +189,9 @@ def build_documents(
         if docx_path is None:
             return None, None, "docx-only"
         protect_inline_properties(docx_path)
+        with ZipFile(docx_path) as package:
+            if package.testzip() is not None or "word/document.xml" not in package.namelist():
+                raise ValueError("生成的 Word 文件完整性检查未通过，已保留原有导出文件。")
         if not export_docx:
             return None, None, "docx-only"
         try:
@@ -214,8 +224,6 @@ def _run_exam_passes(docx_path: Path, raw_exam: dict[str, Any]) -> None:
     restore_native_objects(docx_path, raw_exam)
     apply_semantic_formatting(docx_path)
     apply_exam_format_rules(docx_path)
-    apply_paragraph_formats(docx_path, raw_exam)
-    apply_inline_formats(docx_path, raw_exam)
     enable_chinese_typography(docx_path)
     apply_exam_context_formatting(docx_path, raw_exam)
     apply_segmentation_formatting(docx_path)

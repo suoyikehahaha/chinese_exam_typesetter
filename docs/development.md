@@ -23,15 +23,17 @@ DOCX 处理不依赖办公软件。旧版 DOC 转换按需使用 Word/WPS；已�
 修改导入器、渲染器、Office/WPS 桥接层后运行全部测试：
 
 ```powershell
-.\.venv\Scripts\python.exe -B -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -B -m pytest -q -rs
 ```
 
 一部分测试读取开发机上的真实试卷，未找到原件时会显示 `skipped`。这些原件、学生数据、未公开试题不进入仓库。不要为消除跳过结果而上传真实文档；通用问题应增加合成小样本，真实文档另作本地验收。测试成功数与跳过数应同时记录。
 
+测试集同时包含unittest类与pytest函数，统一使用pytest发现全部用例。GUI回归使用真实Tk控件及隔离的对话框，不会替用户操作现有文档窗口。`workbench_ui.py`负责界面布局，`workbench_state.py`负责草稿与文件名规则，`reference_profile.py`负责用户模板兼容规则。
+
 内部诊断模式可验证打包后的实际代码，不会自动打开编辑窗口：
 
 ```powershell
-$exe = (Resolve-Path '.\release\ChineseExamTypesetter_0.1.5.exe').Path
+$exe = (Resolve-Path '.\output\release\ChineseExamTypesetter_0.2.0.exe').Path
 $inputDoc = (Resolve-Path 'D:\测试目录\脱敏样例.docx').Path
 $diagnosticDir = (New-Item -ItemType Directory -Force '.\work').FullName
 foreach ($mode in @('import', 'preview', 'export')) {

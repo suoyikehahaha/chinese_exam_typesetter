@@ -280,6 +280,14 @@ def paragraph_format_for(raw_exam: dict[str, Any], item: ContentObject) -> dict[
 
     owner = format_owner(raw_exam, item)
     default = default_format_for(item)
+    if raw_exam.get("metadata", {}).get("layout_preset") == "national_ii_2026":
+        default["indent_origin"] = "paragraph"
+        if item.role == "exam_meta":
+            default.update(alignment="左对齐", special_indent="首行", special_indent_chars=2)
+        elif item.role == "material_author":
+            default["font"] = "楷体"
+        elif item.role == "question_stem":
+            default.update(special_indent="无", special_indent_chars=0)
     if owner is None:
         return default
     for entry in owner.get("paragraph_formats", []):
@@ -319,16 +327,6 @@ def set_paragraph_format(raw_exam: dict[str, Any], item: ContentObject, spec: Ma
     owner["paragraph_formats"] = values
     if item.role == "question_stem":
         owner["format"] = {**owner.get("format", {}), **dict(spec)}
-    elif item.role == "choice_option":
-        base = owner.setdefault("format", {})
-        base.update(
-            {
-                "option_font": spec.get("font", "宋体"),
-                "option_size_pt": spec.get("size_pt", 10.5),
-                "option_left_indent_chars": spec.get("left_indent_chars", 1.5),
-                "option_hanging_indent_chars": spec.get("special_indent_chars", 1.7),
-            }
-        )
 
 
 def remove_paragraph_format(raw_exam: dict[str, Any], item: ContentObject) -> None:

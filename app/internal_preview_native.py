@@ -9,6 +9,7 @@ from threading import Lock
 from typing import Any
 
 from docx import Document
+from .source_document import source_document
 from PIL import Image, ImageDraw
 
 from . import internal_preview_core as preview_core
@@ -96,13 +97,12 @@ def _render_table_image(table: Any, *, max_width: int = 620) -> Image.Image:
 def _load_source_visuals(raw_exam: dict[str, Any]) -> Any:
     visuals = _ORIGINAL_VISUAL_LOADER(raw_exam)
     metadata = raw_exam.get("metadata", {})
-    source = Path(str(metadata.get("source_docx_path", "")))
-    if not source.is_file():
-        return visuals
     if not any(item.get("kind") == "table" for item in metadata.get("native_objects", [])):
         return visuals
     try:
-        document = Document(source)
+        document = source_document(metadata)
+        if document is None:
+            return visuals
     except (OSError, ValueError, RuntimeError):
         return visuals
     for item in metadata.get("native_objects", []):

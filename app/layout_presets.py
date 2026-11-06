@@ -8,6 +8,7 @@ from typing import Any
 
 PRESET_LABELS = {
     "national": "全国卷",
+    "national_ii_2026": "全国Ⅱ卷模板（2026）",
     "guangzhou": "广州卷",
     "source": "保留源版式",
 }
@@ -48,7 +49,22 @@ def apply_layout_preset(layout: dict[str, Any], raw_exam: dict[str, Any]) -> dic
     preset = str(metadata.get("layout_preset", "national"))
     result.setdefault("page", {}).update(preset_page(raw_exam, preset))
     styles = result.setdefault("styles", {})
-    if preset == "guangzhou":
+    if preset == "national_ii_2026":
+        result["page"].update(header_distance_mm=15, footer_distance_mm=20)
+        changes = {
+            "exam_meta": {"alignment": "left", "first_line_indent_chars": 2},
+            "section_title": {"font": "SimHei", "size_pt": 12},
+            "material_author": {"font": "KaiTi", "size_pt": 10.5},
+            "material_note": {"font": "FangSong", "size_pt": 9},
+            "material_source": {"font": "FangSong", "size_pt": 10.5},
+            "objective_stem": {"left_indent_chars": 0, "first_line_indent_chars": 0},
+            "subjective_stem": {"left_indent_chars": 0, "first_line_indent_chars": 0},
+            "choice_option": {"left_indent_chars": 1.5, "first_line_indent_chars": -1.7,
+                              "hanging_indent_chars": 1.7, "indent_origin": "paragraph"},
+        }
+        for role, values in changes.items():
+            styles.setdefault(role, {}).update(values)
+    elif preset == "guangzhou":
         styles.setdefault("section_title", {})["size_pt"] = 12
         styles.setdefault("material_note", {}).update({"font": "SimHei", "size_pt": 10})
     elif preset == "national":

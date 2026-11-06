@@ -202,7 +202,7 @@ class DesktopApp(tk.Tk):
         self.busy = False
 
         self.status_var = tk.StringVar(value="已载入全国卷默认预设。")
-        self.template_status_var = tk.StringVar(value="当前版式：全国卷默认预设")
+        self.template_status_var = tk.StringVar(value="母版资源：未选用（可选）")
         self.page_status_var = tk.StringVar(value="尚未生成预览")
 
         self._create_variables()
@@ -609,7 +609,7 @@ class DesktopApp(tk.Tk):
     def _load_question_fields(self, question: dict[str, Any]) -> None:
         self.kind_var.set("客观题" if question.get("kind") == "objective" else "主观题")
         score = question.get("score")
-        self.score_var.set("" if score is None else str(score).rstrip("0").rstrip("."))
+        self.score_var.set("" if score is None else format(float(score), "g"))
         self.option_layout_var.set(
             "两行两列" if question.get("option_layout") == "two_column" else "四行单列"
         )
@@ -737,13 +737,13 @@ class DesktopApp(tk.Tk):
             return
         self.template_path = Path(path)
         self.template_status_var.set(f"当前母版：{self.template_path.name}")
-        self.status_var.set("母版已载入，正在刷新预览。")
+        self.status_var.set("母版已选用。母版页眉页脚请在导出 Word 中核对。")
         self.request_preview()
 
     def use_default_template(self) -> None:
         self.template_path = None
-        self.template_status_var.set("当前版式：全国卷默认预设")
-        self.status_var.set("已恢复全国卷默认预设。")
+        self.template_status_var.set("母版资源：未选用（可选）")
+        self.status_var.set("已取消母版，继续使用所选排版预设。")
         self.request_preview()
 
     def request_preview(self) -> None:

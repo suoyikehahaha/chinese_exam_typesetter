@@ -13,17 +13,19 @@ from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.opc.part import Part
 from docx.oxml.ns import qn
 from .paragraph_identity import paragraph_identity
+from .source_document import source_document
 
 
 def restore_native_objects(docx_path: str | Path, raw_exam: dict[str, Any]) -> None:
     """恢复原文件中的表格 XML、图片数据、尺寸与定位参数。"""
 
     metadata = raw_exam.get("metadata", {})
-    source_path = metadata.get("source_docx_path")
     objects = metadata.get("native_objects", [])
-    if not source_path or not objects or not Path(source_path).exists():
+    if not objects:
         return
-    source = Document(source_path)
+    source = source_document(metadata)
+    if source is None:
+        raise ValueError("无法读取原始 Word 文件中的图片或表格，请恢复原文件的位置，或重新导入后再导出。")
     target_path = Path(docx_path)
     target = Document(target_path)
     for spec in objects:

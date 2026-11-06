@@ -67,7 +67,7 @@ def apply_paragraph_formats(
 
 
 def _option_spec(spec: dict[str, Any]) -> dict[str, Any]:
-    if not spec:
+    if not any(key.startswith("option_") for key in spec):
         return {}
     text_before = _number(spec.get("option_left_indent_chars"), 1.5)
     hanging = _number(spec.get("option_hanging_indent_chars"), 1.7)
@@ -78,6 +78,7 @@ def _option_spec(spec: dict[str, Any]) -> dict[str, Any]:
         "left_indent_chars": text_before,
         "special_indent": "悬挂",
         "special_indent_chars": hanging,
+        "indent_origin": spec.get("option_indent_origin", "first_line"),
         "alignment": spec.get("option_alignment", "左对齐"),
         "line_spacing": spec.get("option_line_spacing", 1.25),
         "space_before_pt": spec.get("option_space_before_pt", 0),
@@ -109,7 +110,7 @@ def _apply(paragraph: Any, spec: dict[str, Any]) -> None:
         amount = abs(first)
 
     if special == "悬挂":
-        paragraph.paragraph_format.left_indent = Pt(size * (left + amount))
+        paragraph.paragraph_format.left_indent = Pt(size * (left if spec.get("indent_origin") == "paragraph" else left + amount))
         paragraph.paragraph_format.first_line_indent = Pt(-size * amount)
     else:
         paragraph.paragraph_format.left_indent = Pt(size * left)

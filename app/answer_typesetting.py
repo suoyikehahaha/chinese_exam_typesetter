@@ -8,6 +8,7 @@ import re
 from typing import Any, Iterable
 
 from .document_read_session import Document
+from .source_document import source_document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -352,8 +353,9 @@ def _render_answer_into(
         paragraph = _new_paragraph(document, 0, "center", 0, 0, Pt(23.5))
         _add_run(paragraph, str(title), "SimSun", 14, bold=True)
 
-    source_path = Path(str(metadata.get("answer_source_docx_path", "")))
-    source = Document(source_path) if source_path.exists() else None
+    source = source_document(metadata, answer=True)
+    if source is None and any(block.get("type") == "answer_table" for block in answer_blocks(raw_exam)):
+        raise ValueError("无法读取原答案中的表格，请恢复原文件的位置，或重新导入答案文件。")
     for block in answer_blocks(raw_exam):
         kind = block.get("type")
         if kind == "answer_section":

@@ -21,6 +21,8 @@ from .preview_cancellation import check_cancelled
 from .chinese_line_break import wrap_plain_text, wrap_rich_text
 from .font_resolver import font_substitution_notice
 from .paragraph_identity import paragraph_identity
+from .reference_profile import is_reference_profile
+from .source_document import source_document
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,11 +87,10 @@ def _load_source_visuals(raw_exam: dict[str, Any]) -> _SourceVisuals:
         if isinstance(entry, dict) and str(entry.get("text", "")).strip():
             decorations[paragraph_identity(entry["text"])].append(entry)
     images: dict[str, list[list[Image.Image]]] = defaultdict(list)
-    source_path = Path(str(metadata.get("source_docx_path", "")))
-    if not source_path.is_file():
-        return _SourceVisuals(dict(decorations), dict(images), {}, {})
     try:
-        document = Document(source_path)
+        document = source_document(metadata)
+        if document is None:
+            return _SourceVisuals(dict(decorations), dict(images), {}, {})
         markers = {
             int(item.get("source_paragraph_index", -1)): str(item.get("marker", ""))
             for item in metadata.get("native_objects", [])
@@ -322,6 +323,9 @@ def render_internal_preview(
             font_notices.add(notice)
         line_spacing = float(spec.get("line_spacing", layout.get("defaults", {}).get("body_line_spacing", 1.25)))
         line_height = max(14, int((font.size * line_spacing + 3) * _WORD_LINE_BOX_FACTOR))
+        if is_reference_profile(raw_exam):
+            indent_chars = None
+            align = None
         indent = float(spec.get("first_line_indent_chars", 0) if indent_chars is None else indent_chars)
         if override and "first_line_indent_chars" in override:
             indent = float(override["first_line_indent_chars"])
@@ -331,7 +335,7 @@ def render_internal_preview(
         point_px = px_per_mm * 25.4 / 72
         indent_px = int(size_pt * indent * point_px)
         text_left = left + int(float(spec.get("left_indent_chars", 0)) * size_pt * point_px)
-        if indent < 0:
+        if indent < 0 and spec.get("indent_origin") != "paragraph":
             text_left += abs(indent_px)
         text_right = right - int(float(spec.get("right_indent_chars", 0)) * size_pt * point_px)
         alignment = str((override or {}).get("alignment", align or spec.get("alignment", "left")))
@@ -351,6 +355,8 @@ def render_internal_preview(
             y += int(float(spec.get("space_after_pt", 0)) * 1.3 + after)
             return
         marks = source_visuals.marks_for(text)
+        if spec.get("bold_prefix_length"):
+            marks.append({"start": 0, "end": int(spec["bold_prefix_length"]), "bold": True})
         drawing = draw or ImageDraw.Draw(Image.new("RGB", (1, 1)))
         bold_font = _font(font_name, size_pt, True) if any(mark.get("bold") for mark in marks) else font
         if marks and (notice := font_substitution_notice(font_name, bold_font)):
@@ -448,7 +454,8 @@ def render_internal_preview(
         if kind == "section_title":
             add_entry(index, str(block.get("text", "")), "section_title", after=3)
         elif kind == "subsection":
-            add_entry(index, f"{block.get('name', '')}{block.get('meta', '')}", "subsection", after=2)
+            prefix = {"bold_prefix_length": len(str(block.get("name", "")))} if is_reference_profile(raw_exam) else None
+            add_entry(index, f"{block.get('name', '')}{block.get('meta', '')}", "subsection", after=2, override=prefix)
         elif kind == "instruction":
             add_entry(index, str(block.get("text", "")), "instruction", indent_chars=2)
         elif kind in {"material", "poetry"}:

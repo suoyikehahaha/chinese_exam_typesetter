@@ -10,6 +10,7 @@ from . import internal_preview_core as preview_core
 from . import internal_preview_native as native_preview
 from .chinese_line_break import wrap_plain_text, wrap_rich_text
 from .font_resolver import load_preview_font
+from .reference_profile import prepare_profile_exam
 
 
 _PATCH_LOCK = Lock()
@@ -30,7 +31,7 @@ def render_internal_preview(
         preview_core._wrap_text = wrap_plain_text
         preview_core._wrap_rich_text = wrap_rich_text
         try:
-            return native_preview.render_internal_preview(raw_exam, layout_path, output_dir)
+            return native_preview.render_internal_preview(prepare_profile_exam(raw_exam), layout_path, output_dir)
         finally:
             preview_core._font = previous_font
             preview_core._wrap_text = previous_plain

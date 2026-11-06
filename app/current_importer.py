@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import base64
 import re
 import tempfile
 from typing import Any
@@ -42,6 +43,11 @@ def import_exam(path: str | Path) -> dict[str, Any]:
             converted = Path(folder) / f"{source.stem}.docx"
             convert_doc_to_docx(source, converted)
             result = import_exam_legacy(converted)
+            metadata = result.setdefault("metadata", {})
+            metadata["converted_docx_base64"] = base64.b64encode(converted.read_bytes()).decode("ascii")
+            metadata["source_docx_path"] = str(source.resolve())
+            if metadata.get("answer_source_docx_path"):
+                metadata["answer_source_docx_path"] = str(source.resolve())
     else:
         result = import_exam_legacy(source)
     ensure_block_ids(result)

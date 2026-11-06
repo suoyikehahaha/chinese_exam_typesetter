@@ -132,6 +132,9 @@ def parse_plain_lines(lines: Iterable[str], title: str = "\u9ad8\u4e2d\u8bed\u65
             continue
 
         if SECTION_RE.match(line):
+            if current_question is not None and not any(cue in line for cue in ("阅读", "文言文", "诗歌", "默写", "名篇名句", "语言文字", "写作", "作文")):
+                current_question.setdefault("embedded_segments", []).append([{"text": line, "role": "body"}])
+                continue
             if awaiting_material and not any(cue in line for cue in ("阅读", "默写", "名篇名句", "语言文字", "写作", "作文")):
                 pending_material.append(line)
                 continue

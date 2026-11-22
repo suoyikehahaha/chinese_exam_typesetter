@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-from docx import Document
+from .word_document import WordTarget, edit_document, save_document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Pt
@@ -25,7 +24,7 @@ ALIGNMENTS = {
 }
 
 
-def apply_block_overrides(docx_path: str | Path, raw_exam: dict[str, Any]) -> None:
+def apply_block_overrides(docx_path: WordTarget, raw_exam: dict[str, Any]) -> None:
     """按内容文本匹配并应用非题目内容块的用户格式。"""
 
     specs: list[tuple[set[str], dict[str, Any]]] = []
@@ -38,15 +37,14 @@ def apply_block_overrides(docx_path: str | Path, raw_exam: dict[str, Any]) -> No
     if not specs:
         return
 
-    target = Path(docx_path)
-    document = Document(target)
+    document = edit_document(docx_path)
     for paragraph in document.paragraphs:
         text = paragraph.text.strip()
         for texts, spec in specs:
             if text in texts:
                 _apply(paragraph, spec)
                 break
-    document.save(target)
+    save_document(document, docx_path)
 
 
 def _block_texts(block: dict[str, Any]) -> set[str]:

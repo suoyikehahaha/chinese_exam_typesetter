@@ -27,22 +27,23 @@ class WordWorkflowTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "只支持导入 Word"):
                 import_exam(path)
 
-    def test_target_pages_default_and_internal_engine(self) -> None:
+    def test_natural_layout_and_internal_engine(self) -> None:
         raw = json.loads((ROOT / "samples" / "exam.json").read_text(encoding="utf-8"))
-        self.assertEqual(get_target_pages(raw), 8)
+        self.assertEqual(get_target_pages(raw), 0)
         with tempfile.TemporaryDirectory() as folder:
             result = render_internal_preview(raw, ROOT / "templates" / "layout.yaml", folder)
             self.assertEqual(result.engine if hasattr(result, "engine") else "internal", "internal")
             self.assertGreaterEqual(result.actual_pages, 1)
 
-    def test_page_target_uses_measured_feedback_in_small_steps(self) -> None:
+    def test_legacy_page_counts_never_change_spacing(self) -> None:
         raw = {"metadata": {"target_pages": 8}}
         self.assertEqual(spacing_scale_for_target(raw), 1.0)
-        self.assertEqual(spacing_scale_for_target(raw, measured_pages=10), 0.94)
-        self.assertEqual(spacing_scale_for_target(raw, measured_pages=6), 1.06)
+        self.assertEqual(spacing_scale_for_target(raw, measured_pages=10), 1.0)
+        self.assertEqual(spacing_scale_for_target(raw, measured_pages=6), 1.0)
 
         raw["metadata"]["page_spacing_scale"] = 1.12
-        self.assertEqual(spacing_scale_for_target(raw), 1.12)
+        self.assertEqual(spacing_scale_for_target(raw), 1.0)
+        self.assertEqual(get_target_pages(raw), 0)
 
     def test_build_ignores_legacy_pdf_flag(self) -> None:
         raw = json.loads((ROOT / "samples" / "exam.json").read_text(encoding="utf-8"))

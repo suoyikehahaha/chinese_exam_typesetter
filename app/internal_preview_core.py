@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
 import re
@@ -17,7 +17,6 @@ from .config import load_layout
 from .font_resolver import load_preview_font as _font
 from .chinese_line_break import wrap_plain_text as _wrap_text
 from .page_layout import adjusted_layout
-from .page_target import get_target_pages
 from .preview_cancellation import check_cancelled
 from .chinese_line_break import wrap_plain_text, wrap_rich_text
 from .font_resolver import font_substitution_notice
@@ -41,7 +40,7 @@ class InternalPreviewResult:
 _MATERIAL_LABEL_RE = re.compile(
     r"^\s*材料(?:[一二三四五六七八九十百]+|\d+)\s*[：:]?\s*$"
 )
-_NATIVE_DRAWING_RE = re.compile(r"^\[\[NATIVE_DRAWING:\d+\]\]$")
+_NATIVE_DRAWING_RE = re.compile(r"^\[\[(?:NATIVE_(?:DRAWING|TABLE)|ANSWER_TABLE):\d+\]\]$")
 # Word-compatible CJK line boxes include additional ascent/descent leading that
 # Pillow's glyph-size metric omits. The factor is verified against the bundled
 # national and Guangzhou reference documents.
@@ -56,6 +55,7 @@ class _SourceVisuals:
     images: dict[str, list[list[Image.Image]]]
     decoration_cursor: dict[str, int]
     image_cursor: dict[str, int]
+    warnings: set[str] = field(default_factory=set)
 
     def marks_for(self, text: str) -> list[dict[str, Any]]:
         if "\n" in text:
@@ -89,42 +89,51 @@ def _load_source_visuals(raw_exam: dict[str, Any]) -> _SourceVisuals:
     decorations: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for entry in metadata.get("source_decorations", []):
         if isinstance(entry, dict) and str(entry.get("text", "")).strip():
-            decorations[paragraph_identity(entry["text"])].append(entry)
+            bucket = decorations[paragraph_identity(entry["text"])]
+            at = int(entry.get("occurrence", len(bucket)))
+            bucket.extend({} for _ in range(at + 1 - len(bucket)))
+            bucket[at] = entry
     images: dict[str, list[list[Image.Image]]] = defaultdict(list)
-    try:
-        document = source_document(metadata)
-        if document is None:
-            return _SourceVisuals(dict(decorations), dict(images), {}, {})
-        markers = {
-            int(item.get("source_paragraph_index", -1)): str(item.get("marker", ""))
-            for item in metadata.get("native_objects", [])
-            if isinstance(item, dict) and item.get("marker")
-        }
-        for paragraph_index, paragraph in enumerate(document.paragraphs):
-            blips = paragraph._p.xpath(".//a:blip")
-            if not blips:
-                continue
-            key = paragraph_identity(paragraph.text) or markers.get(paragraph_index, "")
-            if not key:
-                continue
-            group: list[Image.Image] = []
-            for blip in blips:
-                relationship = blip.get(qn("r:embed"))
-                part = document.part.related_parts.get(relationship)
-                if part is None:
-                    continue
+    result = _SourceVisuals(dict(decorations), images, {}, {})
+    document = source_document(metadata, answer=raw_exam.get("document_kind") == "answer")
+    if document is None:
+        if metadata.get("native_objects"):
+            raise ValueError("图片或表格缺少原文，请恢复原文件的位置，或重新导入。")
+        return result
+    specs = {entry.get("source_paragraph_index"): entry for entry in metadata.get("native_objects", ())
+             if entry.get("kind") == "drawing"}
+    for index, paragraph in enumerate(document.paragraphs):
+        spec = specs.get(index, {})
+        blips = paragraph._p.xpath(".//a:blip | .//*[local-name()='imagedata']")
+        if not (blips or spec):
+            continue
+        key = paragraph_identity(spec.get("marker") or spec.get("target_text") or paragraph.text)
+        if not key:
+            continue
+        group = []
+        for blip in blips:
+            part = document.part.related_parts.get(blip.get(qn("r:embed")) or blip.get(qn("r:id")))
+            if part is not None:
                 try:
                     with Image.open(BytesIO(part.blob)) as source:
                         group.append(source.convert("RGBA"))
                 except (OSError, ValueError):
-                    continue
-            if group:
-                images[key].append(group)
-    except (OSError, ValueError, RuntimeError):
-        # Preview must remain usable when a source document is unavailable or
-        # contains a drawing format that Pillow cannot decode.
-        pass
-    return _SourceVisuals(dict(decorations), dict(images), {}, {})
+                    result.warnings.add(f"原文第 {index + 1} 段含特殊图片，请在导出的 Word 中核对。")
+                    placeholder = Image.new("RGBA", (270, 34), "#F2F5F8")
+                    ImageDraw.Draw(placeholder).text((6, 6), "原文图片 · 请在 Word 中核对", font=_font("SimSun", 10.5), fill="#46566A")
+                    group.append(placeholder)
+        if not group and spec:
+            result.warnings.add(f"原文第 {index + 1} 段包含 Word 绘图，形状和位置请在导出文档中核对。")
+            if spec.get("marker"):
+                placeholder = Image.new("RGBA", (260, 32), "#F2F5F8")
+                ImageDraw.Draw(placeholder).text((5, 5), "原文绘图 · 请在 Word 中核对", font=_font("SimSun", 10.5), fill="#46566A")
+                group.append(placeholder)
+        if group:
+            bucket = images[key]
+            at = int(spec.get("occurrence", len(bucket)))
+            bucket.extend([] for _ in range(at + 1 - len(bucket)))
+            bucket[at] = group
+    return result
 
 
 def _mark_active(ranges: list[dict[str, Any]], position: int, key: str) -> bool:
@@ -196,6 +205,7 @@ def render_internal_preview(
     raw_exam: dict[str, Any],
     layout_path: str | Path,
     output_dir: str | Path,
+    *, visual_loader=None,
 ) -> InternalPreviewResult:
     """Render all blocks while honoring explicit editor format overrides."""
 
@@ -218,7 +228,8 @@ def render_internal_preview(
     page: Image.Image | None = None
     draw: ImageDraw.ImageDraw | None = None
     y = top
-    source_visuals = _load_source_visuals(raw_exam)
+    source_visuals = (visual_loader or _load_source_visuals)(raw_exam)
+    font_notices.update(source_visuals.warnings)
 
     def finalize_page(page_number: int) -> None:
         """Paint preview-only margin guides and a centered page number."""
@@ -527,7 +538,7 @@ def render_internal_preview(
         target = output / f"page-{len(pages) + 1}.png"
         page.save(target, "PNG", compress_level=1)
         pages.append(target)
-    return InternalPreviewResult(tuple(pages), locators, get_target_pages(raw_exam), len(pages), tuple(sorted(font_notices)))
+    return InternalPreviewResult(tuple(pages), locators, 0, len(pages), tuple(sorted(font_notices)))
 
 
 def _material(block: dict[str, Any], index: int, add_entry: Callable[..., None]) -> None:

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from math import floor
 import re
 from typing import Any, Mapping
+from .resource_anchors import remap_ranges
 from .reference_profile import is_reference_profile
 
 
@@ -208,6 +209,12 @@ def _object(
 def set_content_object_text(raw_exam: dict[str, Any], item: ContentObject, value: str) -> None:
     """Commit one object without rewriting sibling content."""
 
+    owner = format_owner(raw_exam, item)
+    if owner and owner.get("inline_formats"):
+        current = owner["inline_formats"]
+        owner["inline_formats"] = [mapped for entry in current for mapped in (
+            remap_ranges([entry], item.text, value) if _inline_entry_matches(entry, item) else [entry]
+        )]
     if item.block_index is None:
         metadata = raw_exam.setdefault("metadata", {})
         if item.target == "notice":
@@ -257,7 +264,8 @@ def _set_question_text(question: dict[str, Any], item: ContentObject, value: str
     elif item.target == "segmentation":
         question["segmentation_text"] = value
     else:
-        values = question.setdefault(item.target, [])
+        field = "subquestions" if item.target == "subquestion" else item.target
+        values = question.setdefault(field, [])
         if item.target_index < len(values):
             values[item.target_index] = value
 

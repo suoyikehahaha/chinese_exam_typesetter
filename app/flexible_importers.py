@@ -7,7 +7,6 @@ the desktop facade handles DOCX and legacy DOC conversion.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
 import re
 import tempfile
@@ -33,6 +32,9 @@ from .answer_typesetting import (
 )
 from .models.identity import ensure_block_ids
 from .layout_presets import DEFAULT_PRESET
+from .import_material_roles import _is_author
+from .word_numbering import NumberingLevel, _format_prefix, _numbering_definitions, materialize_automatic_numbering
+from .drafts import save_draft as save_exam
 
 
 
@@ -242,7 +244,7 @@ def parse_plain_lines(lines: Iterable[str], title: str = "\u9ad8\u4e2d\u8bed\u65
     _recover_question_scores(blocks)
     if not metadata.get("declared_total_score"):
         metadata["total_score"] = _score_total_or_default(blocks, metadata["total_score"])
-    # A selection preserves source numbering and never stretches to eight pages.
+    # A selection preserves the source numbering and declared score.
     header_text = " ".join(clean_lines[:3]) + " " + title
     practice = bool(re.search(r"限时训练|专项|专题训练|片段练习", header_text))
     practice = practice or (len(question_numbers) < 20 and not any(
@@ -380,12 +382,6 @@ def _score_total_or_default(blocks: list[dict[str, Any]], default: float) -> flo
     numeric = [float(score) for score in scores if score is not None]
     return sum(numeric) if numeric and len(numeric) == len(scores) else default
 
-def save_exam(data: dict[str, Any], path: str | Path) -> Path:
-    """\u4fdd\u5b58\u53ef\u7ee7\u7eed\u7f16\u8f91\u7684\u7ed3\u6784\u5316\u8bd5\u9898\u3002"""
-
-    target = Path(path)
-    target.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    return target
 
 
 # merged rule group: native DOCX objects
@@ -404,12 +400,15 @@ def _docx_lines_with_native(
     native: list[dict[str, Any]] = []
     paragraph_index = 0
     table_index = 0
+    occurrences = {}
     for child in document.element.body.iterchildren():
         if isinstance(child, CT_P):
             paragraph = Paragraph(child, document)
             text = paragraph.text.strip()
             drawings = paragraph._p.xpath(".//w:drawing | .//w:pict")
+            occurrence = occurrences.get(text, 0)
             if text:
+                occurrences[text] = occurrence + 1
                 lines.append(text)
             if drawings:
                 if text:
@@ -418,6 +417,7 @@ def _docx_lines_with_native(
                             "kind": "drawing",
                             "source_paragraph_index": paragraph_index,
                             "target_text": text,
+                            "occurrence": occurrence,
                         }
                     )
                 else:
@@ -1559,15 +1559,6 @@ def _trim_answer_from_exam(result: dict[str, Any]) -> None:
         kept_blocks.append(block)
     result["blocks"] = kept_blocks
 
-def _is_author(text: str) -> bool:
-    value = text.strip()
-    if not AUTHOR_RE.fullmatch(value):
-        return False
-    han = len(re.findall(r"[\u3400-\u9fff]", value))
-    return 2 <= han <= 20 and not any(
-        mark in value for mark in ("\u3002", "\uff01", "\uff1f", "\uff1b", "\uff1a", "\u201c", "\u201d")
-    )
-
 def _format(
     index: int,
     font: str,
@@ -1661,250 +1652,6 @@ def _publication_note_format(index: int) -> dict[str, Any]:
     }
 
 
-# merged rule group: automatic numbering
-
-
-@dataclass
-class NumberingLevel:
-    num_fmt: str
-    level_text: str
-    start: int
-
-def materialize_automatic_numbering(document: Any) -> int:
-    """Prefix paragraph text with the list label Word normally paints on screen."""
-
-    definitions = _numbering_definitions(document)
-    counters: dict[tuple[int, int], int] = {}
-    inserted = 0
-    for paragraph in document.paragraphs:
-        key = _paragraph_numbering(paragraph)
-        if key is None or key not in definitions:
-            continue
-        num_id, level = key
-        definition = definitions[key]
-        counter_key = (num_id, level)
-        value = counters.get(counter_key, definition.start - 1) + 1
-        counters[counter_key] = value
-        prefix = _format_prefix(definition, value)
-        if not prefix or _already_has_prefix(paragraph.text, prefix):
-            continue
-        _prepend_text(paragraph, prefix)
-        inserted += 1
-    return inserted
-
-def _numbering_definitions(document: Any) -> dict[tuple[int, int], NumberingLevel]:
-    try:
-        root = document.part.numbering_part.element
-    except (AttributeError, KeyError, NotImplementedError):
-        # Some valid DOCX files have no numbering relationship at all.  They
-        # still contain ordinary paragraphs and should continue through the
-        # normal parser without requiring a synthetic numbering part.
-        return {}
-    abstract: dict[int, dict[int, NumberingLevel]] = {}
-    for item in root.findall(qn("w:abstractNum")):
-        abstract_id = int(item.get(qn("w:abstractNumId")))
-        levels: dict[int, NumberingLevel] = {}
-        for level in item.findall(qn("w:lvl")):
-            level_id = int(level.get(qn("w:ilvl"), "0"))
-            fmt = level.find(qn("w:numFmt"))
-            text = level.find(qn("w:lvlText"))
-            start = level.find(qn("w:start"))
-            levels[level_id] = NumberingLevel(
-                str(fmt.get(qn("w:val"), "decimal")) if fmt is not None else "decimal",
-                str(text.get(qn("w:val"), "%1.")) if text is not None else "%1.",
-                int(start.get(qn("w:val"), "1")) if start is not None else 1,
-            )
-        abstract[abstract_id] = levels
-    result: dict[tuple[int, int], NumberingLevel] = {}
-    for item in root.findall(qn("w:num")):
-        num_id = int(item.get(qn("w:numId")))
-        abstract_ref = item.find(qn("w:abstractNumId"))
-        if abstract_ref is None:
-            continue
-        abstract_id = int(abstract_ref.get(qn("w:val")))
-        levels = dict(abstract.get(abstract_id, {}))
-        for override in item.findall(qn("w:lvlOverride")):
-            level_id = int(override.get(qn("w:ilvl"), "0"))
-            current = levels.get(level_id, NumberingLevel("decimal", "%1.", 1))
-            start_override = override.find(qn("w:startOverride"))
-            if start_override is not None:
-                current = NumberingLevel(
-                    current.num_fmt,
-                    current.level_text,
-                    int(start_override.get(qn("w:val"), "1")),
-                )
-            levels[level_id] = current
-        for level_id, definition in levels.items():
-            result[(num_id, level_id)] = definition
-    return result
-
-def _paragraph_numbering(paragraph: Any) -> tuple[int, int] | None:
-    num_pr = None
-    if paragraph._p.pPr is not None:
-        num_pr = paragraph._p.pPr.numPr
-    if num_pr is None and paragraph.style is not None:
-        style_ppr = paragraph.style.element.pPr
-        if style_ppr is not None:
-            num_pr = style_ppr.numPr
-    if num_pr is None or num_pr.numId is None:
-        return None
-    num_id = int(num_pr.numId.val)
-    level = int(num_pr.ilvl.val) if num_pr.ilvl is not None else 0
-    return num_id, level
-
-def _format_prefix(definition: NumberingLevel, value: int) -> str:
-    if definition.num_fmt == "upperLetter":
-        label = _letters(value)
-    elif definition.num_fmt == "lowerLetter":
-        label = _letters(value).lower()
-    elif definition.num_fmt == "decimal":
-        label = str(value)
-    elif definition.num_fmt in {"chineseCounting", "chineseCountingThousand"} and 0 < value < 100:
-        digits = "零一二三四五六七八九"
-        label = digits[value] if value < 10 else (digits[value // 10] if value >= 20 else "") + "十" + (digits[value % 10] if value % 10 else "")
-    else:
-        return ""
-    prefix = definition.level_text.replace("%1", label)
-    if re.fullmatch(r"[A-Za-z0-9]+\.", prefix):
-        prefix = prefix[:-1] + "\uff0e"
-    elif re.fullmatch(r"\([A-Za-z0-9]+\)", prefix):
-        prefix = "\uff08" + prefix[1:-1] + "\uff09"
-    return prefix
-
-def _letters(value: int) -> str:
-    result = ""
-    current = max(1, int(value))
-    while current:
-        current, remainder = divmod(current - 1, 26)
-        result = chr(ord("A") + remainder) + result
-    return result
-
-def _already_has_prefix(text: str, prefix: str) -> bool:
-    stripped = str(text).lstrip()
-    plain = prefix.replace("\uff0e", ".").replace("\uff08", "(").replace("\uff09", ")")
-    return stripped.startswith(prefix) or stripped.startswith(plain)
-
-def _prepend_text(paragraph: Any, prefix: str) -> None:
-    if paragraph.runs:
-        paragraph.runs[0].text = prefix + paragraph.runs[0].text
-        return
-    paragraph.add_run(prefix)
-
-
-# merged from current_importer.py
-
-
-_AUTHOR_RE = re.compile(r"^[\u3400-\u9fff\u00b7\u3001\uff0c,\s]{2,30}$")
-
-_TITLE_AUTHOR_RE = re.compile(
-    r"^(?P<title>\u300a[^\u300b]+\u300b|[^|\uff5c\t]{2,40})"
-    r"(?:\s{2,}|\u3000{1,}|[|\uff5c\t]+)"
-    r"(?P<author>[\u3400-\u9fff\u00b7\u3001\uff0c,\s]{2,30})$"
-)
-
-_SOURCE_RE = re.compile(
-    r"^\s*[\uff08(].*(?:\u6458\u81ea|\u6458\u7f16\u81ea|\u9009\u81ea|\u8282\u9009\u81ea|\u8bd1|\u53d1\u8868\u4e8e|\u520a\u4e8e|\u8f7d\u4e8e|\u6709\u5220\u6539|\u6709\u6539\u52a8).*[\uff09)]\s*$"
-)
-
-def _normalize_same_line_title_authors(
-    result: dict[str, Any],
-    diagnostics: list[dict[str, Any]],
-) -> None:
-    """Split centered-style ``title  author`` lines when evidence is strong."""
-
-    for index, block in enumerate(result.get("blocks", [])):
-        if not isinstance(block, dict) or block.get("type") not in {"material", "poetry"}:
-            continue
-        if block.get("title") or block.get("author"):
-            continue
-        paragraphs = [str(value).strip() for value in block.get("paragraphs", [])]
-        if not paragraphs:
-            continue
-        match = _TITLE_AUTHOR_RE.fullmatch(paragraphs[0])
-        if not match or not _is_author(match.group("author")):
-            continue
-        title = match.group("title").strip()
-        author = match.group("author").strip()
-        if _looks_like_label(title) or _looks_like_body(title):
-            continue
-        block["title"] = title
-        block["author"] = author
-        block["paragraphs"] = paragraphs[1:]
-        roles = list(block.get("paragraph_roles", []))
-        if len(roles) != len(paragraphs):
-            roles = ["body"] * len(paragraphs)
-        block["paragraph_roles"] = roles[1:]
-        formats = list(block.get("paragraph_formats", []))
-        formats.append(_role_format("author", 0, "\u4eff\u5b8b", "\u5c45\u4e2d"))
-        block["paragraph_formats"] = formats
-        diagnostics.append(
-            {
-                "code": "same-line-title-author",
-                "block": block.get("id", f"block-{index + 1}"),
-                "message": "\u5df2\u6839\u636e\u5206\u9694\u7b26\u548c\u4f5c\u8005\u6587\u5b57\u7279\u5f81\u62c6\u5206\u540c\u4e00\u884c\u6807\u9898\u4e0e\u4f5c\u8005",
-            }
-        )
-
-def _normalize_publication_notes(result: dict[str, Any]) -> None:
-    """Ensure article-end parenthetical notes use the source-note role."""
-
-    for block in result.get("blocks", []):
-        if not isinstance(block, dict) or block.get("type") not in {"material", "poetry"}:
-            continue
-        paragraphs = [str(value).strip() for value in block.get("paragraphs", [])]
-        roles = list(block.get("paragraph_roles", []))
-        if len(roles) != len(paragraphs):
-            roles = ["body"] * len(paragraphs)
-        formats = list(block.get("paragraph_formats", []))
-        for index, text in enumerate(paragraphs):
-            if _SOURCE_RE.fullmatch(text):
-                roles[index] = "source"
-                formats = [
-                    item
-                    for item in formats
-                    if int(item.get("target_index", -1)) != index
-                ]
-                formats.append(_role_format("source", index, "\u4eff\u5b8b", "\u53f3\u5bf9\u9f50"))
-        block["paragraph_roles"] = roles
-        if formats:
-            block["paragraph_formats"] = formats
-
-def _role_format(
-    role: str,
-    index: int,
-    font: str,
-    alignment: str,
-) -> dict[str, Any]:
-    return {
-        "target_index": index,
-        "semantic_role": role,
-        "font": font,
-        "size_pt": 10.5,
-        "bold": False,
-        "alignment": alignment,
-        "left_indent_chars": 0,
-        "special_indent": "\u65e0",
-        "special_indent_chars": 0,
-        "line_spacing": 1.25,
-        "space_before_pt": 0,
-        "space_after_pt": 0,
-    }
-
-def _is_author(value: str) -> bool:
-    text = value.strip()
-    if any(cue in text for cue in ("研究报告", "研究结论", "问题提出", "资料整理")):
-        return False
-    if not _AUTHOR_RE.fullmatch(text):
-        return False
-    return 2 <= len(re.findall(r"[\u3400-\u9fff]", text)) <= 20
-
-def _looks_like_label(value: str) -> bool:
-    return bool(re.match(r"^(?:\u6750\u6599|\u6587\u672c|\u6587\u6bb5|\u6ce8\u91ca|\u8bf4\u660e)[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u53410-9\uff1a:]", value))
-
-def _looks_like_body(value: str) -> bool:
-    return len(value) > 24 or value.endswith(("\u3002", "\uff01", "\uff1f", "\uff1b"))
-
-
 def _parse_docx_payload(source: Path, original: Path) -> dict[str, Any]:
     """Extract a DOCX in document order while retaining native objects."""
 
@@ -1990,7 +1737,12 @@ def import_exam(path: str | Path) -> dict[str, Any]:
             "\u652f\u6301\u7684\u8bd5\u9898\u683c\u5f0f\u4e3a DOCX\u3001DOC\u3001JSON\u3001TXT \u548c Markdown\u3002"
         )
     if is_standalone_answer_docx(source):
-        return standalone_answer_model(parse_answer_docx(source))
+        result = standalone_answer_model(parse_answer_docx(source))
+        document = Document(source)
+        _, native = _docx_lines_with_native(document)
+        result["metadata"]["native_objects"] = [spec for spec in native if spec["kind"] == "drawing"]
+        result["metadata"]["source_decorations"] = _collect_source_decorations(document)
+        return result
 
     # Reopen for numbering edits: cached python-docx back-references cannot
     # reliably be deep-copied together with the package's serialization tree.

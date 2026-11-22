@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
 from typing import Any, Iterator
 
-from docx import Document
+from .word_document import WordTarget, edit_document, save_document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Pt
@@ -23,11 +22,10 @@ SOURCE_RE = re.compile(
 )
 
 
-def apply_semantic_formatting(docx_path: str | Path) -> None:
+def apply_semantic_formatting(docx_path: WordTarget) -> None:
     """Apply the confirmed semantic styles after rendering."""
 
-    target = Path(docx_path)
-    document = Document(target)
+    document = edit_document(docx_path)
     for paragraph in _all_paragraphs(document):
         text = paragraph.text.strip()
         match = LABEL_RE.match(text)
@@ -45,7 +43,7 @@ def apply_semantic_formatting(docx_path: str | Path) -> None:
             paragraph.paragraph_format.left_indent = Pt(0)
             for run in paragraph.runs:
                 _font(run, "FangSong", 10.5)
-    document.save(target)
+    save_document(document, docx_path)
 
 
 def _format_label(paragraph: Any, label: str, body: str) -> None:

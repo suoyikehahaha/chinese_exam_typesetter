@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Iterator
 
-from docx import Document
+from .word_document import WordTarget, edit_document, save_document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
 
-def enable_chinese_typography(docx_path: str | Path) -> None:
+def enable_chinese_typography(docx_path: WordTarget) -> None:
     """逐段启用中文禁则，允许行末标点悬挂到边界外。"""
 
-    target = Path(docx_path)
-    document = Document(target)
+    document = edit_document(docx_path)
     settings = document.settings.element
     compat = settings.find(qn("w:compat"))
     if compat is None:
@@ -45,7 +43,7 @@ def enable_chinese_typography(docx_path: str | Path) -> None:
                 lang = OxmlElement("w:lang")
                 rpr.append(lang)
             lang.set(qn("w:eastAsia"), "zh-CN")
-    document.save(target)
+    save_document(document, docx_path)
 
 
 def _on(parent: Any, name: str) -> None:

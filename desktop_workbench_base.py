@@ -16,7 +16,6 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
 from PIL import Image, ImageTk
-import pypdfium2 as pdfium
 
 from app.config import load_layout
 from app.editor_importers import import_exam, save_exam
@@ -84,18 +83,8 @@ def build_documents(
 
 
 def rasterize_pdf(pdf_path: Path, output_dir: Path) -> list[Path]:
-    """把 PDF 转成预览页面。"""
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    document = pdfium.PdfDocument(pdf_path)
-    pages: list[Path] = []
-    for index in range(len(document)):
-        page = document[index]
-        bitmap = page.render(scale=1.65)
-        target = output_dir / f"page-{index + 1}.png"
-        bitmap.to_pil().save(target)
-        pages.append(target)
-    return pages
+    from app.print_proof import rasterize_pdf as draw_pages
+    return draw_pages(pdf_path, output_dir)
 
 
 class ExportDialog(tk.Toplevel):
@@ -178,7 +167,7 @@ class ExportDialog(tk.Toplevel):
 class DesktopApp(tk.Tk):
     """试题结构编辑、格式设置、预览与导出工作台。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, legacy_tasks: bool = True) -> None:
         super().__init__()
         self.title(f"{APP_TITLE} v{VERSION}")
         self.geometry("1380x840")
@@ -210,8 +199,9 @@ class DesktopApp(tk.Tk):
         self._build_ui()
         self._populate_tree()
         self._load_global_fields()
-        self.after(200, self._poll_messages)
-        self.after(700, self.request_preview)
+        if legacy_tasks:
+            self.after(200, self._poll_messages)
+            self.after(700, self.request_preview)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _setup_styles(self) -> None:

@@ -16,6 +16,7 @@ def build_workbench_shell(app) -> None:
     toolbar = ttk.Frame(app, style="Toolbar.TFrame", padding=(18, 10))
     toolbar.pack(fill=tk.X)
     ttk.Button(toolbar, text="导入 Word", command=app.import_new_exam, style="Primary.TButton").pack(side=tk.LEFT)
+    app.cancel_import_button = ttk.Button(toolbar, text="取消导入", command=app.cancel_import)
     app.file_label_var = tk.StringVar(value="内置示例 · 可导入整卷、限时训练或参考答案")
     app.file_label = ttk.Label(toolbar, textvariable=app.file_label_var, style="Toolbar.TLabel", width=36, anchor=tk.W)
     app.file_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=16)
@@ -29,6 +30,7 @@ def build_workbench_shell(app) -> None:
     right = ttk.Frame(app.main_pane, padding=12, style="Panel.TFrame")
     app.main_pane.add(left, weight=4)
     app.main_pane.add(right, weight=7)
+    app.editor_panel = left
     app._build_editor_panel(left)
     app._build_preview_panel(right)
 

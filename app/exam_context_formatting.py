@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
 from typing import Any, Iterator
 
-from docx import Document
+from .word_document import WordTarget, edit_document, save_document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Pt
@@ -22,13 +21,12 @@ SOURCE_RE = re.compile(
 
 
 def apply_exam_context_formatting(
-    docx_path: str | Path,
+    docx_path: WordTarget,
     raw_exam: dict[str, Any],
 ) -> None:
     """Apply confirmed styles whose meaning depends on surrounding structure."""
 
-    target = Path(docx_path)
-    document = Document(target)
+    document = edit_document(docx_path)
     memorization_texts = _memorization_texts(raw_exam)
     meta_text = str(raw_exam.get("metadata", {}).get("meta_text", "")).strip()
     for paragraph in _all_paragraphs(document):
@@ -51,7 +49,7 @@ def apply_exam_context_formatting(
             paragraph.paragraph_format.first_line_indent = Pt(10.5 * 2)
             for run in paragraph.runs:
                 _font(run, "SimSun", 10.5)
-    document.save(target)
+    save_document(document, docx_path)
 
 
 def _memorization_texts(raw_exam: dict[str, Any]) -> set[str]:

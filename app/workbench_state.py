@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
@@ -11,9 +10,9 @@ from .export_naming import with_export_suffix
 
 
 def draft_signature(raw: dict) -> str:
-    """Ignore transient pagination feedback when checking for unsaved edits."""
-    value = deepcopy(raw)
-    value.setdefault("metadata", {}).pop("page_spacing_scale", None)
+    """Ignore obsolete page-target fields and embedded bytes when checking for edits."""
+    value = {**raw, "metadata": {k: v for k, v in raw.get("metadata", {}).items()
+                                 if k not in {"target_pages", "page_spacing_scale", "source_blobs"}}}
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 

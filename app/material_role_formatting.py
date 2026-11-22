@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Iterator
 
-from docx import Document
+from .word_document import WordTarget, edit_document, save_document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Pt
@@ -14,14 +13,13 @@ from .notice_material_formatting import apply_notice_material_formatting
 
 
 def apply_material_role_formatting(
-    docx_path: str | Path,
+    docx_path: WordTarget,
     raw_exam: dict[str, Any],
 ) -> None:
     """Apply v7 and all material paragraph roles recorded by importer v11."""
 
-    target = Path(docx_path)
-    apply_notice_material_formatting(target, raw_exam)
-    document = Document(target)
+    apply_notice_material_formatting(docx_path, raw_exam)
+    document = edit_document(docx_path)
     role_texts: dict[str, set[str]] = {
         "subheading": set(),
         "author": set(),
@@ -47,7 +45,7 @@ def apply_material_role_formatting(
             _paragraph_style(paragraph, "FangSong", 10.5, "right")
         elif text in role_texts["label"]:
             _paragraph_style(paragraph, "SimHei", 10.5, "left")
-    document.save(target)
+    save_document(document, docx_path)
 
 
 def _paragraph_style(

@@ -60,7 +60,6 @@ class PreviewRegressionTests(unittest.TestCase):
         }
         app.layout_path = Path("templates/layout.yaml")
         app._global_commit_after = None
-        app.target_pages_var = _Value()
         app.margin_top_var = _Value()
         app.margin_bottom_var = _Value()
         app.margin_left_var = _Value()
@@ -75,7 +74,7 @@ class PreviewRegressionTests(unittest.TestCase):
         metadata = app.raw_exam["metadata"]
         self.assertEqual(metadata["exam_name"], "导入试卷名称")
         self.assertEqual(metadata["meta_text"], "导入说明")
-        self.assertEqual(metadata["target_pages"], 8)
+        self.assertEqual(metadata["target_pages"], 0)
         self.assertEqual(metadata["layout_preset"], "national_ii_2026")
         self.assertEqual(metadata["page_overrides"]["margin_top_mm"], 25.4)
 

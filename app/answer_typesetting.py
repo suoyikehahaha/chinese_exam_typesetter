@@ -9,6 +9,7 @@ from typing import Any, Iterable
 
 from .document_read_session import Document
 from .source_document import source_document
+from .word_document import WordTarget, edit_document, save_document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -17,6 +18,7 @@ from docx.table import Table
 from docx.text.paragraph import Paragraph
 
 from .native_docx_objects import _remap_image_relationships
+from .resource_anchors import register_block_paragraphs, remap_ranges
 
 
 ANSWER_MARKER_RE = re.compile(
@@ -58,10 +60,12 @@ def _answer_heading(text: str) -> bool:
 
 def _answer_children(document: Any):
     """Split joined consecutive choice answers without changing the package."""
+    source_index = -1
     for child in document.element.body.iterchildren():
         if child.tag != qn("w:p"):
-            yield child
+            yield None, child
             continue
+        source_index += 1
         paragraph = Paragraph(child, document)
         text = paragraph.text
         first = QUESTION_RE.match(text)
@@ -73,7 +77,7 @@ def _answer_children(document: Any):
                     cuts.append(match.start(1))
                     expected += 1
         if len(cuts) == 1:
-            yield child
+            yield source_index, child
             continue
         for start, end in zip(cuts, cuts[1:] + [len(text)]):
             copied = deepcopy(child)
@@ -83,7 +87,7 @@ def _answer_children(document: Any):
                 left, right = max(0, start-cursor), min(len(value), end-cursor)
                 run.text = value[left:right] if right > left else ""
                 cursor += len(value)
-            yield copied
+            yield source_index, copied
 
 
 def is_standalone_answer_docx(path: str | Path) -> bool:
@@ -127,7 +131,6 @@ def parse_answer_docx(
     state = "answer"
     question_number: int | None = None
     table_index = 0
-    paragraph_counter = -1
 
     def flush() -> None:
         nonlocal current
@@ -138,17 +141,17 @@ def parse_answer_docx(
 
     started = start_paragraph is None
     skipped_marker = False
-    for child in _answer_children(document):
+    for source_index, child in _answer_children(document):
         if child.tag == qn("w:p"):
-            paragraph_counter += 1
             paragraph = Paragraph(child, document)
-            source_index = paragraph_counter
             if not started:
                 if source_index is not None and source_index >= int(start_paragraph):
                     started = True
                 else:
                     continue
             text = paragraph.text.strip()
+            if not text and paragraph._p.xpath(".//w:drawing | .//w:pict"):
+                text = f"[[NATIVE_DRAWING:{source_index}]]"
             if not text:
                 continue
             if (
@@ -159,7 +162,7 @@ def parse_answer_docx(
                 skipped_marker = True
                 continue
             if start_paragraph is None and not blocks and current is None:
-                if _looks_like_title(text, paragraph, len(title_lines)):
+                if not text.startswith("[[NATIVE_") and _looks_like_title(text, paragraph, len(title_lines)):
                     title_lines.append(text)
                     continue
 
@@ -312,6 +315,13 @@ def render_answer_docx(
 ) -> Path:
     """Render a standalone answer in the Guangzhou reference layout."""
 
+    target = Path(output_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    compose_answer(raw_exam, layout).save(target)
+    return target
+
+
+def compose_answer(raw_exam, layout=None):
     document = Document()
     _configure_answer_page(document)
     if layout:
@@ -323,24 +333,20 @@ def render_answer_docx(
                 if key in page:
                     setattr(section, attribute, Mm(page[key]))
     _render_answer_into(document, raw_exam, add_page_break=False)
-    target = Path(output_path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    document.save(target)
-    return target
+    return document
 
 
 def append_answer_to_docx(
-    docx_path: str | Path,
+    docx_path: WordTarget,
     raw_exam: dict[str, Any],
 ) -> None:
     """Append a Guangzhou-style answer section to an exam DOCX."""
 
     if not answer_blocks(raw_exam):
         return
-    target = Path(docx_path)
-    document = Document(target)
+    document = edit_document(docx_path)
     _render_answer_into(document, raw_exam, add_page_break=True)
-    document.save(target)
+    save_document(document, docx_path)
 
 
 def answer_titles(raw_exam: dict[str, Any]) -> list[str]:
@@ -370,28 +376,40 @@ def _render_answer_into(
     source = source_document(metadata, answer=True)
     if source is None and any(block.get("type") == "answer_table" for block in answer_blocks(raw_exam)):
         raise ValueError("无法读取原答案中的表格，请恢复原文件的位置，或重新导入答案文件。")
+    if not hasattr(document.part, "exam_paragraphs"):
+        document.part.exam_paragraphs = {}
     for block in answer_blocks(raw_exam):
+        created = []
         kind = block.get("type")
         if kind == "answer_section":
             paragraph = _new_paragraph(document, 0, "left", 6.3, 0, Pt(17))
             _add_run(paragraph, str(block.get("text", "")), "SimHei", 12)
+            created.append(paragraph)
         elif kind == "answer_subsection":
             paragraph = _new_paragraph(document, 21, "left", 6.3, 0, Pt(17))
             _add_run(paragraph, str(block.get("name", "")), "SimSun", 10.5, bold=True)
             _add_run(paragraph, str(block.get("meta", "")), "SimSun", 10.5)
+            created.append(paragraph)
         elif kind in {"answer_question", "answer_text"}:
             header = str(block.get("header", "")).strip()
             if header:
                 paragraph = _new_paragraph(document, 0, "left", 0, 0, Pt(17))
                 _add_run(paragraph, header, "SimSun", 10.5)
+                created.append(paragraph)
             for entry in block.get("paragraphs", []):
-                _render_answer_paragraph(document, entry)
-        elif kind == "answer_table" and source is not None:
+                created.append(_render_answer_paragraph(document, entry))
+        elif kind == "answer_table":
             index = int(block.get("source_table_index", -1))
-            if 0 <= index < len(source.tables):
+            if source is None or not 0 <= index < len(source.tables):
+                raise ValueError(f"答案表格 {index + 1} 缺少原文资源，请恢复原文件或重新导入。")
+            else:
+                if not hasattr(document.part, "rendered_answer_tables"):
+                    document.part.rendered_answer_tables = []
+                document.part.rendered_answer_tables.append(block)
                 copied = deepcopy(source.tables[index]._element)
                 _remap_image_relationships(copied, source.part, document.part)
                 document.element.body.insert(-1, copied)
+        register_block_paragraphs(document, block, created)
     _add_page_numbers(document)
 
 
@@ -444,7 +462,9 @@ def answer_paragraph_font(entry: dict[str, Any]) -> str:
     return style[0]
 
 
-def _render_answer_paragraph(document: Any, entry: dict[str, Any]) -> None:
+def _render_answer_paragraph(document: Any, entry: dict[str, Any]) -> Any:
+    if not isinstance(entry, dict):
+        entry = {"text": str(entry)}
     role = str(entry.get("role", "subjective_answer"))
     text = str(entry.get("text", ""))
     paragraph = _new_paragraph(document, 21, "left", 0, 0, Pt(17))
@@ -460,6 +480,18 @@ def _render_answer_paragraph(document: Any, entry: dict[str, Any]) -> None:
         10.5,
         prefix_end=prefix_end,
     )
+    return paragraph
+
+
+def answer_run_ranges(source_runs, text):
+    original = ""
+    ranges = []
+    for spec in source_runs:
+        start = len(original)
+        original += str(spec.get("text", ""))
+        if any(spec.get(key) for key in ("underline", "emphasis", "bold")):
+            ranges.append({**spec, "start": start, "end": len(original)})
+    return remap_ranges(ranges, original, text)
 
 
 def _render_with_decorations(
@@ -480,14 +512,11 @@ def _render_with_decorations(
             _add_run(paragraph, text, font_name, size)
         return
     boundaries = {0, len(text)}
-    cursor = 0
-    normalized: list[tuple[int, int, dict[str, Any]]] = []
-    for spec in runs:
-        value = str(spec.get("text", ""))
-        start, end = cursor, min(len(text), cursor + len(value))
+    normalized = []
+    for spec in answer_run_ranges(runs, text):
+        start, end = spec["start"], spec["end"]
         boundaries.update((start, end))
         normalized.append((start, end, spec))
-        cursor = end
     if prefix_end:
         boundaries.add(prefix_end)
     points = sorted(boundaries)
@@ -500,6 +529,8 @@ def _render_with_decorations(
         )
         fragment_font = "SimSun" if prefix_end and start < prefix_end else font_name
         run = _add_run(paragraph, text[start:end], fragment_font, size)
+        if source.get("bold"):
+            run.bold = True
         if source.get("underline"):
             run.underline = True
         emphasis = str(source.get("emphasis", ""))
@@ -519,6 +550,7 @@ def _source_run_decorations(paragraph: Any) -> list[dict[str, Any]]:
             {
                 "text": run.text,
                 "underline": bool(run.underline),
+                "bold": bool(run.bold),
                 "emphasis": emphasis[0].get(qn("w:val")) if emphasis else "",
             }
         )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import tempfile
@@ -39,31 +40,36 @@ class PdfExporter:
         source_ps = str(source).replace("'", "''")
         target_ps = str(target).replace("'", "''")
         script = (
-            "$ErrorActionPreference='Stop';"
-            "$word=New-Object -ComObject Word.Application;"
-            "$word.Visible=$false;"
-            "try {"
-            f"$doc=$word.Documents.Open('{source_ps}');"
-            f"$doc.ExportAsFixedFormat('{target_ps}',17);"
-            "$doc.Close($false)"
-            "} finally {$word.Quit()}"
+            "$ErrorActionPreference='Stop';$word=$null;$doc=$null;$exported=$false;"
+            "try {$word=New-Object -ComObject Word.Application;"
+            "$word.Visible=$false;$word.DisplayAlerts=0;$word.AutomationSecurity=3;"
+            f"$source='{source_ps}';$target='{target_ps}';"
+            "$doc=$word.Documents.Open($source,$false,$true,$false);"
+            "$doc.ExportAsFixedFormat($target,17);$exported=$true"
+            "} catch {[Console]::Error.WriteLine($_.Exception.Message)} finally {"
+            "try {if($null -ne $doc){$doc.Close()}} catch {[Console]::Error.WriteLine($_.Exception.Message)};"
+            "try {if($null -ne $word){$word.Quit()}} catch {[Console]::Error.WriteLine($_.Exception.Message)}"
+            "};if(-not $exported){exit 1};exit 0"
         )
         completed = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", script],
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-STA", "-Command", script],
             capture_output=True,
             text=True,
             timeout=90,
             check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        if completed.returncode != 0 or not target.exists():
+        if completed.returncode != 0 or not target.is_file() or not target.stat().st_size:
             message = completed.stderr.strip() or completed.stdout.strip() or "Word COM 未生成 PDF"
             raise PdfExportError(message)
 
     @staticmethod
     def _export_with_libreoffice(source: Path, target: Path) -> None:
         candidates = [
+            os.environ.get("SOFFICE_PATH"),
             shutil.which("soffice"),
+            str(Path(os.environ.get("ProgramW6432", "")) / "LibreOffice/program/soffice.exe"),
+            str(Path(os.environ.get("ProgramFiles", "")) / "LibreOffice/program/soffice.exe"),
             r"C:\Program Files\LibreOffice\program\soffice.exe",
             r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
         ]

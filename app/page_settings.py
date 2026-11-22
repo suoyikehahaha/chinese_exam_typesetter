@@ -19,20 +19,6 @@ def build_page_settings(app, parent, group_type):
     app.template_label = ttk.Label(parent, textvariable=app.layout_preset_var, style="EditorHint.TLabel")
     app.template_label.pack(anchor=tk.W, pady=(2, 10))
 
-    pagination = ttk.Frame(parent)
-    pagination.pack(fill=tk.X, pady=(0, 8))
-    ttk.Label(pagination, text="分页").pack(side=tk.LEFT, padx=(0, 12))
-    app.pagination_mode_var = tk.StringVar(master=app, value="目标页数")
-    app.pagination_mode_box = ttk.Combobox(pagination, textvariable=app.pagination_mode_var,
-                                         values=("自然分页", "目标页数"), width=10, state="readonly")
-    app.pagination_mode_box.pack(side=tk.LEFT)
-    app.pagination_mode_box.bind("<<ComboboxSelected>>", app._pagination_mode_changed)
-    app.target_pages_entry = ttk.Spinbox(pagination, textvariable=app.target_pages_var,
-                                       from_=1, to=32, width=5)
-    app.target_pages_entry.pack(side=tk.LEFT, padx=(10, 4))
-    app.target_pages_suffix = ttk.Label(pagination, text="页")
-    app.target_pages_suffix.pack(side=tk.LEFT)
-
     ttk.Label(parent, text="页边距（毫米）").pack(anchor=tk.W, pady=(3, 5))
     margins = ttk.Frame(parent)
     margins.pack(anchor=tk.W)

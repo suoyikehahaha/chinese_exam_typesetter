@@ -10,13 +10,15 @@ from tkinter import ttk
 from typing import Any, Hashable, Mapping
 from PIL import Image, ImageTk
 
-from .editable_a4_canvas import EditableA4Canvas
+from .page_viewport import PageViewport
 
 
-class ReadOnlyPreview(EditableA4Canvas):
+class ReadOnlyPreview(PageViewport):
     """Extend the stable page-image preview with precise semantic navigation."""
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, parent, *, status_variable, on_select=None, on_change=None,
+                 on_inline_format=None, on_undo=None, on_redo=None, on_print_proof=None) -> None:
+        self._on_print_proof = on_print_proof
         self._highlight_widget: tk.Frame | None = None
         self._highlight_after: str | None = None
         self._visible_after: str | None = None
@@ -28,7 +30,9 @@ class ReadOnlyPreview(EditableA4Canvas):
         self._page_fingerprints: list[str] = []
         self.changed_pages: set[int] = set()
         self._page_captions: list[tk.Label] = []
-        super().__init__(*args, **kwargs)
+        super().__init__(parent, status_variable=status_variable)
+        self._build_toolbar()
+        self._build_surface()
         self.canvas.bind("<Configure>", self._fit_on_resize, add="+")
         scrollbar_set = self.canvas.cget("yscrollcommand")
 
@@ -44,6 +48,9 @@ class ReadOnlyPreview(EditableA4Canvas):
         bar.pack(fill=tk.X)
         ttk.Label(bar, text="页面预览", style="Title.TLabel").pack(side=tk.LEFT)
         ttk.Label(bar, textvariable=self.status_variable, foreground="#6A7C90").pack(side=tk.RIGHT)
+        self.proof_button = ttk.Button(bar, text="打印校对", command=self._on_print_proof)
+        if self._on_print_proof:
+            self.proof_button.pack(side=tk.RIGHT, padx=9)
         controls = ttk.Frame(self, padding=(0, 0, 0, 8))
         controls.pack(fill=tk.X)
         ttk.Button(controls, text="上一页", command=self.previous_page).pack(side=tk.LEFT)
@@ -84,13 +91,26 @@ class ReadOnlyPreview(EditableA4Canvas):
         zoom = max(0.25, min(1.35, (self.canvas.winfo_width() - 44) / self._page_sizes[0][0]))
         if abs(self.zoom - zoom) > 0.008:
             self.zoom = zoom
-            self.set_preview_pages(self.preview_pages, locators=self.locators, actual_pages=self.actual_pages)
+            self._resize_display()
 
     def change_zoom(self, delta: float) -> None:
         self._fit_enabled = False
         self.zoom = max(0.25, min(1.35, self.zoom + delta))
         if self.preview_pages:
-            self.set_preview_pages(self.preview_pages, locators=self.locators, actual_pages=self.actual_pages)
+            self._resize_display()
+
+    def _resize_display(self) -> None:
+        anchor = self._capture_page_position()
+        for index in self._visible_photos:
+            self._image_labels[index].configure(image="")
+        self._visible_photos.clear()
+        self.preview_image_refs.clear()
+        for frame, (width, height) in zip(self.page_frames, self._page_sizes):
+            frame.configure(width=round(width * self.zoom) + 2, height=round(height * self.zoom) + 2)
+        self._queue_layout_sync()
+        if anchor is not None:
+            self._restore_page_position(anchor)
+        self._queue_visible_pages()
 
     def _queue_visible_pages(self) -> None:
         if self._visible_after is None:
@@ -134,6 +154,7 @@ class ReadOnlyPreview(EditableA4Canvas):
         actual_pages: int | None = None,
         raw_exam: dict[str, Any] | None = None,
         selected_key: Hashable | None = None,
+        page_info=(),
     ) -> bool:
         """Load rendered pages and retain both block and object locators."""
 
@@ -141,17 +162,32 @@ class ReadOnlyPreview(EditableA4Canvas):
         paths = [Path(page) for page in pages]
         sizes, fingerprints = [], []
         try:
-            for path in paths:
-                payload = path.read_bytes()
-                fingerprints.append(sha256(payload).hexdigest())
-                with Image.open(BytesIO(payload)) as source:
-                    sizes.append(source.size)
+            for index, path in enumerate(paths):
+                if page_info and len(page_info) == len(paths):
+                    if not path.is_file():
+                        raise FileNotFoundError(path)
+                    width, height, digest = page_info[index]
+                    sizes.append((width, height))
+                    fingerprints.append(digest)
+                else:
+                    payload = path.read_bytes()
+                    fingerprints.append(sha256(payload).hexdigest())
+                    with Image.open(BytesIO(payload)) as source:
+                        sizes.append(source.size)
         except OSError as exc:
             detail = exc.strerror or str(exc)
             self.update_message_var.set(f"预览图片“{path.name}”无法读取：{detail}。请点击“应用并查看”重新生成预览。")
             return False
         self.changed_pages = {index for index, value in enumerate(fingerprints)
                               if index >= len(self._page_fingerprints) or value != self._page_fingerprints[index]}
+        if self.page_frames and not self.changed_pages and len(paths) == len(self.page_frames):
+            self.preview_pages = paths
+            self.locators = dict(locators or {})
+            self.block_pages = {key: int(value[0]) for key, value in self.locators.items()}
+            self.actual_pages = actual_pages or len(paths)
+            if raw_exam is not None:
+                self.raw_exam = raw_exam
+            return True
         self._page_fingerprints = fingerprints
         self._clear_position_marker()
         self._image_preview = True

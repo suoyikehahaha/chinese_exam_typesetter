@@ -16,8 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(scope="module")
-def workbench():
-    with patch.object(CurrentDesktopApp, "request_preview"), \
+def workbench(tmp_path_factory):
+    import os
+    with patch.dict(os.environ, EXAM_TYPESETTER_STATE_DIR=str(tmp_path_factory.mktemp("workbench-state"))), \
+         patch.object(CurrentDesktopApp, "request_preview"), \
          patch.object(CurrentDesktopApp, "_schedule_canvas_preview"), \
          patch.object(CurrentDesktopApp, "_activate_file_drop"):
         try:
@@ -42,6 +44,7 @@ def workbench():
                 command = window.tk.call("after", "info", timer)[0]
                 owner = next((w for w in owners if command in (w._tclCommands or [])), window)
                 owner.after_cancel(timer)
+            window._recovery.close()
             window._preview_service.close()
             window._export_executor.shutdown(wait=True, cancel_futures=True)
             window.temp_context.cleanup()
@@ -200,6 +203,7 @@ def preview_pages(tmp_path, name, changed=False):
 def finish_settings_preview(app, pages):
     from copy import deepcopy
     from app.preview_service import PreviewResult
+    app._requested_revision = (app._session_generation, app._revision)
     app._preview_generation += 1
     app._preview_settings_feedback = deepcopy(app._settings_feedback)
     app._finish_preview(PreviewResult(app._preview_generation, tuple(pages), 'internal', {}, 8, len(pages), 1))
@@ -220,17 +224,21 @@ def test_global_panel_is_compact_and_scope_is_clear(app):
     assert '影响所有页面' not in app.selection_title_var.get()
 
 
-def test_natural_pagination_hides_page_count_and_retains_model(app):
-    app.pagination_mode_var.set('自然分页')
-    app._pagination_mode_changed()
-    assert app.target_pages_var.get() == '0'
-    assert not app.target_pages_entry.winfo_manager()
-    assert app._commit_global_settings(show_error=False)
-    assert app.raw_exam['metadata']['target_pages'] == 0
-    app.pagination_mode_var.set('目标页数')
-    app._pagination_mode_changed()
-    assert app.target_pages_entry.winfo_manager() == 'pack'
-    assert app.target_pages_var.get() == '8'
+def test_old_page_target_is_discarded_in_both_document_scopes(app):
+    app.raw_exam["metadata"].update(target_pages=8, page_spacing_scale=0.78)
+    app._load_global_fields()
+    widgets = list(app.global_group.body.winfo_children())
+    while widgets:
+        widget = widgets.pop()
+        if "text" in widget.keys():
+            assert widget.cget("text") not in ("分页方式", "目标页数")
+        widgets.extend(widget.winfo_children())
+    for scope in ("局部训练", "全卷"):
+        app.document_scope_var.set(scope)
+        app._scope_changed()
+        assert app._commit_global_settings(show_error=False)
+        assert app.raw_exam["metadata"]["target_pages"] == 0
+        assert "page_spacing_scale" not in app.raw_exam["metadata"]
 
 
 def test_applying_margins_returns_to_viewed_page_and_reports_visible_change(app, tmp_path):
@@ -329,10 +337,191 @@ def test_new_global_edit_discards_queued_old_preview(app):
 
 def test_page_counter_updates_while_editing_global_fields(app):
     preview = app.document_editor
-    with patch.object(preview, 'focus_get', return_value=app.target_pages_entry):
+    with patch.object(preview, 'focus_get', return_value=app.apply_page_settings_button):
         preview._update_status(2)
     assert preview.page_number_var.get() == '3'
     preview.page_number_var.set('7')
     with patch.object(preview, 'focus_get', return_value=preview.page_number_entry):
         preview._update_status(2)
     assert preview.page_number_var.get() == '7'
+
+def test_queued_preview_after_body_edit_is_discarded_and_immediate_export_uses_current_text(app, tmp_path):
+    from app.preview_service import PreviewResult
+    import time
+
+    select_question(app)
+    # Request the older revision before editing the selected stem.
+    old_token = (app._session_generation, app._revision)
+    app._displayed_revision = app._requested_revision = old_token
+    ticket = app._preview_ticket
+    app.raw_exam["metadata"]["page_spacing_scale"] = 0.82
+    app.stem_text.insert("end", "正文校订")
+    app._schedule_text_commit()
+    app._ui_messages.put(("preview", ticket, PreviewResult(app._preview_generation, (), "internal", {}, 8, 1, 0.82)))
+    app._poll_ui_messages()
+    assert "page_spacing_scale" not in app.raw_exam["metadata"]
+    got = {}
+    def export(raw, layout, output, basename, **kwargs):
+        got.update(raw["metadata"])
+        got["blocks"] = str(raw["blocks"])
+        return tmp_path / "done.docx", None, "docx-only"
+    with patch("app.preview_service.render_quick_preview", side_effect=AssertionError("unexpected pre-export rendering")), \
+         patch("app.workbench_tasks.build_documents", side_effect=export):
+        app.start_export(tmp_path, "done", True, False)
+        deadline = time.monotonic() + 4
+        while app._export_in_progress and time.monotonic() < deadline:
+            app.update()
+            time.sleep(0.01)
+    assert not app._export_in_progress and "正文校订" in got["blocks"]
+    assert "page_spacing_scale" not in got
+    assert app._displayed_revision != (app._session_generation, app._revision)
+
+
+@pytest.mark.parametrize("outcome", ["cancel", "error", "success"])
+def test_pending_import_protects_old_editor_and_only_current_result_wins(app, tmp_path, outcome):
+    from concurrent.futures import Future
+    from copy import deepcopy
+    import time
+
+    select_question(app)
+    app.stem_text.insert("end", "旧稿校订")
+    app._commit_current_text(schedule_preview=False)
+    prior = deepcopy(app.raw_exam)
+    replacement = deepcopy(prior)
+    replacement["metadata"]["exam_name"] = "新试卷"
+    future = Future()
+    future.set_running_or_notify_cancel()
+    with patch.object(app._export_executor, "submit", return_value=future), \
+         patch("tkinter.messagebox.askyesnocancel", return_value=False), patch("tkinter.messagebox.showerror"):
+        app._import_exam_path(tmp_path / "新试卷.docx")
+        assert app._import_in_progress and str(app.stem_text.cget("state")) == "disabled"
+        app.stem_text.insert("end", "误输入")
+        app.undo_action()
+        assert not app._commit_current_text(schedule_preview=False)
+        if outcome == "cancel":
+            app.cancel_import()
+        if outcome == "error":
+            future.set_exception(ValueError("格式损坏"))
+        else:
+            future.set_result(replacement)
+        deadline = time.monotonic() + 2
+        while app._import_in_progress and time.monotonic() < deadline:
+            app.update()
+            time.sleep(0.01)
+        app.update()
+    assert not app._import_in_progress and str(app.stem_text.cget("state")) == "normal"
+    assert app.raw_exam["metadata"]["exam_name"] == (replacement if outcome == "success" else prior)["metadata"]["exam_name"]
+    assert "误输入" not in str(app.raw_exam["blocks"])
+    if outcome != "success":
+        assert "旧稿校订" in str(app.raw_exam["blocks"]) and app.undo_stack
+
+
+def test_downloaded_update_can_wait_and_install_must_check_dirty_draft(app, tmp_path):
+    select_question(app)
+    app.stem_text.insert("end", "未保存")
+    path = tmp_path / "ChineseExamTypesetter_0.3.1.exe"
+    app._update_messages.put(("downloaded", path))
+    with patch("tkinter.messagebox.askyesno", return_value=False), \
+         patch("desktop_app.schedule_portable_update") as install:
+        app._poll_update_messages()
+        install.assert_not_called()
+    assert app._pending_update == path and not app._closing
+    with patch("tkinter.messagebox.askyesno", return_value=True), \
+         patch("tkinter.messagebox.askyesnocancel", return_value=None) as prompt, \
+         patch("desktop_app.schedule_portable_update") as install:
+        app.check_for_updates()
+        prompt.assert_called_once()
+        install.assert_not_called()
+    assert not app._closing
+    with patch("tkinter.messagebox.askyesno", return_value=True), \
+         patch("tkinter.messagebox.askyesnocancel", return_value=True), \
+         patch.object(app, "save_project", return_value=False) as save, \
+         patch("desktop_app.schedule_portable_update") as install:
+        app.check_for_updates()
+        save.assert_called_once()
+        install.assert_not_called()
+    for choice in (True, False):
+        with patch("tkinter.messagebox.askyesno", return_value=True), \
+             patch("tkinter.messagebox.askyesnocancel", return_value=choice), \
+             patch.object(app, "save_project", return_value=True) as save, \
+             patch("desktop_app.schedule_portable_update", side_effect=OSError("isolated installer")) as install, \
+             patch("tkinter.messagebox.showerror"):
+            app.check_for_updates()
+            install.assert_called_once_with(path)
+            assert save.call_count == int(choice)
+    app._pending_update = None
+
+
+def test_draft_save_shortcuts_and_issue_navigation(app, tmp_path):
+    select_question(app)
+    app.score_var.set("")
+    app._refresh_score_display()
+    assert app.review_panel.rows
+    row = next(i for i, (_, index) in enumerate(app.review_panel.rows) if index == app.selected_block_index)
+    app.review_panel.toggle()
+    app.review_panel.listbox.selection_set(row)
+    app.review_panel._go()
+    assert app.inspector_tabs.index(app.inspector_tabs.select()) == 0
+    first, second = tmp_path/"first.json", tmp_path/"second.json"
+    with patch("tkinter.filedialog.asksaveasfilename", side_effect=[str(first), str(second)]) as ask:
+        assert app.save_project()
+        app.stem_text.insert("end", "草稿保存")
+        assert app.save_project()
+        assert "草稿保存" in first.read_text(encoding="utf8")
+        assert app.save_project(save_as=True)
+        assert ask.call_count == 2 and app._project_path == second
+
+
+def test_zoom_keeps_frames_and_never_hashes_pages(app, tmp_path):
+    preview = app.document_editor
+    preview.set_preview_pages(preview_pages(tmp_path, "zoom"))
+    frames = tuple(preview.page_frames)
+    with patch("app.read_only_preview.sha256", side_effect=AssertionError), \
+         patch.object(preview, "set_preview_pages", side_effect=AssertionError):
+        preview.change_zoom(-0.08)
+        preview.fit_width()
+    assert frames == tuple(preview.page_frames)
+
+def test_recover_abandoned_draft_through_file_menu(app, tmp_path):
+    import json
+    from copy import deepcopy
+    from app.drafts import save_draft
+
+    directory = app._recovery.directory
+    directory.mkdir(parents=True, exist_ok=True)
+    raw = deepcopy(app.raw_exam)
+    raw["metadata"]["exam_name"] = "中断后恢复的试卷"
+    leftover = save_draft(raw, directory / "previous-window.json")
+    with patch("tkinter.messagebox.askyesno", return_value=True), \
+         patch("tkinter.messagebox.askyesnocancel", return_value=False):
+        app.recover_draft()
+    assert app.raw_exam["metadata"]["exam_name"] == "中断后恢复的试卷"
+    assert app._recovered_path == leftover and leftover.is_file()
+    assert draft_signature(app.raw_exam) != app._saved_signature
+    saved = tmp_path / "restored.json"
+    with patch("tkinter.filedialog.asksaveasfilename", return_value=str(saved)):
+        assert app.save_project()
+    assert json.loads(saved.read_text(encoding="utf8"))["metadata"]["exam_name"] == "中断后恢复的试卷"
+    assert not leftover.exists()
+
+
+def test_image_and_source_marks_survive_actual_undo_redo(app, tmp_path):
+    from docx import Document
+    from app.current_importer import import_exam
+    from app.current_pipeline import build_documents
+    from tests.test_document_reliability import illustrated_file, LAYOUT
+    source = illustrated_file(tmp_path)
+    app._apply_imported_exam(source, import_exam(source))
+    select_question(app)
+    for command, changed in ((None, True), (app.undo_action, False), (app.redo_action, True)):
+        if command is None:
+            app.stem_text.insert("end", "补入")
+            assert app._commit_current_text(schedule_preview=False)
+        else:
+            command()
+        file, _, _ = build_documents(app.raw_exam, LAYOUT, tmp_path, "redo")
+        doc = Document(file)
+        paragraph = next(p for p in doc.paragraphs if "关键句" in p.text)
+        assert ("补入" in paragraph.text) == changed
+        assert "".join(r.text for r in paragraph.runs if r.underline) == "关键句"
+        assert len(doc.inline_shapes) == 1

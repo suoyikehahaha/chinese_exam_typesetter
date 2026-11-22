@@ -156,21 +156,35 @@ def test_inline_edit_preserves_drawing_in_same_paragraph(tmp_path):
     assert result.paragraphs[0].text == "图文正文"
 
 
-def test_preview_and_export_apply_same_spacing_scale_without_office(tmp_path):
+def test_legacy_pagination_preserves_explicit_spacing_in_preview_and_word(tmp_path):
     raw = reference_exam()
     raw["metadata"].update(target_pages=8, page_spacing_scale=0.8, source_docx_path="original.docx")
     raw["blocks"][3]["paragraphs"] = ["用于检查行距的连续文字。" * 16]
     item = next(x for x in content_objects_for_block(raw["blocks"][3], 3) if x.target == "paragraph")
-    set_paragraph_format(raw, item, {"font": "楷体", "size_pt": 10.5, "line_spacing": 1.5})
+    set_paragraph_format(raw, item, {"font": "楷体", "size_pt": 10.5, "line_spacing": 2.5, "space_before_pt": 10, "space_after_pt": 14})
     with patch('app.exporters.pdf_exporter.PdfExporter._export_with_libreoffice', side_effect=AssertionError('unexpected Office calibration')):
         calls, document, _ = draw_and_export(raw, tmp_path / "scaled")
     paragraph = next(p for p in document.paragraphs if "用于检查行距" in p.text)
-    assert abs(paragraph.paragraph_format.line_spacing - 1.2) < 0.01
+    assert abs(paragraph.paragraph_format.line_spacing - 2.5) < 0.01
+    assert paragraph.paragraph_format.space_before.pt == 10
+    assert paragraph.paragraph_format.space_after.pt == 14
     baseline = deepcopy(raw)
     baseline["metadata"]["page_spacing_scale"] = 1
     baseline_calls, _, _ = draw_and_export(baseline, tmp_path / "baseline")
     def line_gap(values):
         positions = [xy[1] for xy, text, _ in values if "检查行距" in text]
         return positions[1] - positions[0]
-    assert 0.72 < line_gap(calls) / line_gap(baseline_calls) < 0.9
-    assert raw["blocks"][3]["paragraph_formats"][0]["line_spacing"] == 1.5
+    assert line_gap(calls) == line_gap(baseline_calls)
+    assert raw["blocks"][3]["paragraph_formats"][0]["line_spacing"] == 2.5
+
+def test_long_paper_exceeds_eight_pages_without_changing_text_or_page_images(tmp_path):
+    import hashlib
+    raw = reference_exam()
+    raw["blocks"][3]["paragraphs"] = ["长卷自然分页校验。" * 14 for _ in range(110)]
+    def image_hashes(model, folder):
+        preview = render_internal_preview(model, LAYOUT, folder)
+        assert preview.actual_pages == len(preview.pages) > 8
+        return [hashlib.sha256(page.read_bytes()).digest() for page in preview.pages]
+    clean = image_hashes(raw, tmp_path / "clean")
+    raw["metadata"].update(target_pages=1, page_spacing_scale=0.72)
+    assert image_hashes(raw, tmp_path / "legacy") == clean

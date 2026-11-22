@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
-from docx import Document
+from .word_document import WordTarget, edit_document, save_document
 
 
 FOLLOWING_CONTENT_STYLES = {
@@ -15,11 +14,10 @@ FOLLOWING_CONTENT_STYLES = {
 }
 
 
-def apply_pagination_guards(path: str | Path) -> None:
+def apply_pagination_guards(path: WordTarget) -> None:
     """保护诗歌、作文和题内材料，避免题干或短内容组跨页。"""
 
-    target = Path(path)
-    document = Document(target)
+    document = edit_document(path)
     paragraphs = document.paragraphs
     for index, paragraph in enumerate(paragraphs):
         next_style = paragraphs[index + 1].style.name if index + 1 < len(paragraphs) else ""
@@ -34,4 +32,4 @@ def apply_pagination_guards(path: str | Path) -> None:
             paragraph.paragraph_format.keep_with_next = next_style == "Exam_embedded_body"
         if paragraph.style.name == "Exam_subquestion":
             paragraph.paragraph_format.keep_with_next = next_style == "Exam_subquestion"
-    document.save(target)
+    save_document(document, path)

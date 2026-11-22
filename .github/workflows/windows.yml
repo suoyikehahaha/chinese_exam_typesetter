@@ -1,0 +1,49 @@
+name: Windows regression and portable build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    env:
+      PYTHONUTF8: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements-runtime.txt -r requirements-build.txt
+      - name: Install Chinese print fonts
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "$env:WINDIR/Fonts/simfang.ttf")) {
+            Add-WindowsCapability -Online -Name "Language.Fonts.Hans~~~und-HANS~0.0.1.0"
+          }
+      - name: Run application tests
+        run: python -m pytest -q
+      - name: Build and check portable application
+        shell: pwsh
+        run: |
+          ./build_windows.ps1 -PythonPath (Get-Command python).Source -DistPath output/release
+          $package = @(Get-ChildItem output/release/ChineseExamTypesetter_*.exe)
+          if ($package.Count -ne 1) { throw "Expected one portable package." }
+          $healthPath = Join-Path $env:RUNNER_TEMP "exam-startup.json"
+          $process = Start-Process -FilePath $package[0].FullName -ArgumentList ('--startup-test-output "' + $healthPath + '"') -WindowStyle Hidden -PassThru -Wait
+          $health = Get-Content -LiteralPath $healthPath -Encoding UTF8 -Raw | ConvertFrom-Json
+          if ($process.ExitCode -ne 0 -or $health.status -ne "GUI_STARTUP_OK" -or $package[0].BaseName -ne "ChineseExamTypesetter_$($health.version)") { throw "Portable startup check failed." }
+          $hash = (Get-FileHash -Algorithm SHA256 $package[0].FullName).Hash.ToLowerInvariant()
+          "$hash  $($package[0].Name)" | Set-Content -Encoding ascii output/release/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Windows-portable
+          path: output/release/

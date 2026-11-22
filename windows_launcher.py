@@ -115,7 +115,7 @@ def _run_font_test(output: Path) -> int:
     return 0 if values["all_cjk_fonts_valid"] else 2
 
 
-def _run_preview_test(module: object, source: Path, output: Path) -> int:
+def _run_preview_test(module: object, source: Path, output: Path, *, print_proof=False) -> int:
     """Render one real DOCX through the packaged internal preview service."""
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -132,7 +132,7 @@ def _run_preview_test(module: object, source: Path, output: Path) -> int:
             results.append(result)
             ready.set()
 
-        service.submit(raw_exam, Path("templates/layout.yaml"), None, receive)
+        service.submit(raw_exam, Path("templates/layout.yaml"), None, receive, print_proof=print_proof)
         if not ready.wait(120):
             raise TimeoutError("预览任务超过 120 秒未完成")
         result = results[0]
@@ -214,6 +214,8 @@ def _run_export_test(module: object, source: Path, output: Path) -> int:
 
 
 def _run_startup_test(module: object, output: Path) -> int:
+    from time import monotonic
+    started = monotonic()
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
         json.dumps({"status": "GUI_STARTUP_CONSTRUCTING"}, ensure_ascii=False),
@@ -236,9 +238,27 @@ def _run_startup_test(module: object, output: Path) -> int:
         )
         return 1
 
+    exit_code = 0
+    ready = monotonic() - started
+    def failed(error):
+        nonlocal exit_code
+        exit_code = 1
+        output.write_text(json.dumps({"status": "GUI_STARTUP_FAILED", "error": str(error)}, ensure_ascii=False), encoding="utf-8")
+        app._on_close()
+
     def finish() -> None:
+        if app._closing:
+            return
+        if app._displayed_revision is None or not app.preview_pages:
+            if monotonic() - started >= 25:
+                failed("内置示例预览未能就绪")
+            else:
+                app.after(45, finish)
+            return
         payload = {
             "status": "GUI_STARTUP_OK",
+            "ui_constructed_seconds": round(ready, 3),
+            "first_preview_seconds": round(monotonic() - started, 3),
             "version": module.APP_VERSION,
             "tree": bool(app.tree.get_children("")),
             "preview_service": type(app._preview_service).__module__,
@@ -258,9 +278,10 @@ def _run_startup_test(module: object, output: Path) -> int:
         output.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         app._on_close()
 
-    app.after(1800, finish)
+    app._finish_task_error = failed
+    app.after_idle(finish)
     app.mainloop()
-    return 0
+    return exit_code
 
 
 def _make_drop_handle(path: Path) -> int:
@@ -388,10 +409,11 @@ def main() -> int:
     module = _load_application()
     if "--font-test-output" in sys.argv:
         return _run_font_test(Path(sys.argv[sys.argv.index("--font-test-output") + 1]))
-    if "--preview-test" in sys.argv:
-        source = Path(sys.argv[sys.argv.index("--preview-test") + 1])
+    if "--preview-test" in sys.argv or "--print-proof-test" in sys.argv:
+        option = "--print-proof-test" if "--print-proof-test" in sys.argv else "--preview-test"
+        source = Path(sys.argv[sys.argv.index(option) + 1])
         output = Path(sys.argv[sys.argv.index("--test-output") + 1])
-        return _run_preview_test(module, source, output)
+        return _run_preview_test(module, source, output, print_proof=option == "--print-proof-test")
     if "--export-test" in sys.argv:
         source = Path(sys.argv[sys.argv.index("--export-test") + 1])
         output = Path(sys.argv[sys.argv.index("--test-output") + 1])

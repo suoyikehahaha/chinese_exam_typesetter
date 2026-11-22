@@ -16,7 +16,7 @@
 | 内部页面预览 | `app/internal_preview.py`、`app/internal_preview_core.py`、`app/internal_preview_native.py` |
 | 版式与字体配置 | `templates/layout.yaml` |
 
-DOCX处理不依赖办公软件。旧版DOC转换按需使用Word/WPS；预览和导出共用段落调节参数，导出阶段不再调用LibreOffice重新校准行距。内部预览仍是估算，不能代替打印前核验。
+DOCX处理不依赖办公软件。旧版DOC转换按需使用Word/WPS；预览和导出读取相同的模板与手动段落格式，所有文档按内容自然分页。快速预览显示估算页数。用户点击“打印校对”后，后台按当前修订生成正式 DOCX 副本，再调用本机 Word 或 LibreOffice。临时打印文件在页面转成图像后清理。
 
 ## 验证要求
 
@@ -33,7 +33,7 @@ DOCX处理不依赖办公软件。旧版DOC转换按需使用Word/WPS；预览�
 内部诊断模式可验证打包后的实际代码，不会自动打开编辑窗口：
 
 ```powershell
-$exe = (Resolve-Path '.\output\release\ChineseExamTypesetter_0.2.2.exe').Path
+$exe = (Resolve-Path '.\output\release\ChineseExamTypesetter_0.3.0.exe').Path
 $inputDoc = (Resolve-Path 'D:\测试目录\脱敏样例.docx').Path
 $diagnosticDir = (New-Item -ItemType Directory -Force '.\work').FullName
 foreach ($mode in @('import', 'preview', 'export')) {
@@ -55,7 +55,7 @@ foreach ($mode in @('import', 'preview', 'export')) {
 4. 在目标 Windows 环境检查 EXE、真实文档导入导出、预览与数据兼容。核对源文件哈希，保护原件。
 5. 只在新包验收后清理构建中间文件；本地最多额外保留一个近期回滚版本。
 
-运行依赖目前使用最低版本约束，构建器固定为 PyInstaller 6.22.3。相同源码在不同依赖环境下可能生成不同二进制，因此不能宣称逐字节可复现；每次发布必须校验实际上传的资产。
+打包与 Windows 自动回归使用 requirements 文件中锁定的运行依赖和构建器。内置版式配置读取器随源码分发。相同源码在不同依赖环境下可能生成不同二进制，因此不能宣称逐字节可复现；每次发布校验实际上传的资产。更新器读取 GitHub 的 SHA-256 摘要或同次发布的 SHA256SUMS.txt，安装前确认草稿，替换后运行新 EXE 的启动诊断。
 
 ## GitHub 发布
 

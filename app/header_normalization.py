@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-from docx import Document
+from .word_document import WordTarget, edit_document, save_document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Pt
@@ -14,28 +13,26 @@ from .publication_note_formatting import apply_publication_note_formatting
 
 
 def apply_header_normalization(
-    docx_path: str | Path,
+    docx_path: WordTarget,
     raw_exam: dict[str, Any],
 ) -> None:
     """Apply v10, remove duplicate regional metadata, and center exam info."""
 
-    target = Path(docx_path)
-    apply_publication_note_formatting(target, raw_exam)
-    normalize_header(target, raw_exam)
+    apply_publication_note_formatting(docx_path, raw_exam)
+    normalize_header(docx_path, raw_exam)
 
 
 def normalize_header(
-    docx_path: str | Path,
+    docx_path: WordTarget,
     raw_exam: dict[str, Any],
 ) -> None:
     """Normalize the rendered header without re-running earlier formatters."""
 
-    target = Path(docx_path)
-    document = Document(target)
+    document = edit_document(docx_path)
     metadata = raw_exam.get("metadata", {})
     _deduplicate_institution_date(document, metadata)
     _deduplicate_and_center_exam_info(document, metadata)
-    document.save(target)
+    save_document(document, docx_path)
 
 
 def _deduplicate_institution_date(

@@ -34,7 +34,7 @@ class GitHubUpdaterTests(unittest.TestCase):
         from desktop_app import CurrentDesktopApp
         app = SimpleNamespace(
             _update_messages=queue.Queue(), _update_in_progress=True,
-            _update_automatic=automatic, status_var=Mock(), busy_bar=Mock(),
+            _update_automatic=automatic, _help_menu=Mock(), status_var=Mock(), busy_bar=Mock(),
             after=Mock(), _poll_update_messages=Mock(), _download_update=Mock(),
         )
         app._update_messages.put((kind, payload))
@@ -53,7 +53,8 @@ class GitHubUpdaterTests(unittest.TestCase):
         with patch('desktop_app.messagebox.showerror') as show:
             cls._poll_update_messages(app)
         show.assert_not_called()
-        self.assertIn('重试', app.status_var.set.call_args.args[0])
+        app.status_var.set.assert_not_called()
+        self.assertIn('重新检查', app._help_menu.entryconfigure.call_args.kwargs['label'])
         self.assertFalse(app._update_in_progress)
 
     def test_new_release_requires_download_confirmation(self):
@@ -97,7 +98,7 @@ class GitHubUpdaterTests(unittest.TestCase):
                 },
                 {
                     "name": "ChineseExamTypesetter_0.2.0.exe",
-                    "browser_download_url": "https://github.com/example/ChineseExamTypesetter_0.2.0.exe",
+                    "browser_download_url": "https://github.com/suoyikehahaha/chinese_exam_typesetter/releases/download/v0.2.0/ChineseExamTypesetter_0.2.0.exe",
                     "size": 1024,
                 },
             ],

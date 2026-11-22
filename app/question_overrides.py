@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
 from typing import Any
 
-from docx import Document
+from .word_document import WordTarget, edit_document, save_document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Pt
@@ -39,14 +38,13 @@ def question_formats(raw_exam: dict[str, Any]) -> dict[int, dict[str, Any]]:
     return result
 
 
-def apply_question_overrides(docx_path: str | Path, raw_exam: dict[str, Any]) -> None:
+def apply_question_overrides(docx_path: WordTarget, raw_exam: dict[str, Any]) -> None:
     """将逐题字体、缩进、行距和分页参数应用到 DOCX。"""
 
     formats = question_formats(raw_exam)
     if not formats:
         return
-    target = Path(docx_path)
-    document = Document(target)
+    document = edit_document(docx_path)
     active_question: int | None = None
 
     for paragraph in document.paragraphs:
@@ -71,7 +69,7 @@ def apply_question_overrides(docx_path: str | Path, raw_exam: dict[str, Any]) ->
         }:
             active_question = None
 
-    document.save(target)
+    save_document(document, docx_path)
 
 
 def _apply_paragraph(paragraph: Any, spec: dict[str, Any]) -> None:

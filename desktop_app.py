@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from copy import deepcopy
 import ctypes
 from decimal import Decimal
 import json
@@ -17,13 +16,12 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable, Iterable
 
 import desktop_workbench_base as legacy_base
-import app.internal_preview_core as internal_preview_core
 import app.inspector_model as inspector_model
 from app.config import load_layout
 from app.current_importer import import_exam
-from app.current_pipeline import ExportDestinationError, build_documents
-from app.export_naming import default_export_basename, with_export_suffix
-from app.flexible_importers import save_exam
+from app.current_pipeline import build_documents
+from app.export_naming import default_export_basename
+from app.drafts import DraftRecovery
 from app.github_updater import (
     check_latest_release,
     download_release_asset,
@@ -32,36 +30,29 @@ from app.github_updater import (
 from app.github_update_page import GITHUB_REPOSITORY, GitHubUpdatePage
 from app.inspector_model import (
     ContentObject,
-    build_object_locators,
     content_objects_for_block,
     format_owner,
     inline_formats_for,
     metadata_content_objects,
-    objects_in_scope,
     paragraph_format_for,
-    remove_paragraph_format,
-    set_content_object_text,
-    set_inline_format,
-    set_paragraph_format,
     summary_text,
 )
 from app.layout_presets import DEFAULT_PRESET, PRESET_LABELS, preset_page
-from app.page_layout import adjusted_layout
+from app.page_target import use_natural_pagination
 from app.page_settings import DocumentSettingsPanel, build_page_settings
-from app.preview_service import PreviewResult, PreviewService
+from app.preview_service import PreviewService
+from app.review_items import ReviewPanel, review_items
 from app.read_only_preview import ReadOnlyPreview
-from app.score_summary import TARGET_SCORE, ScoreSummary, calculate_score_summary, format_score, parse_score
+from app.score_summary import ScoreSummary, calculate_score_summary, format_score, parse_score
 from app.windows_drop import install_file_drop, uninstall_file_drop
 from app.version import APP_TITLE, APP_VERSION
 from app.windows_style import apply_windows_style
-from app.workbench_state import draft_signature, suggested_export_path, validate_format
+from app.workbench_state import draft_signature, suggested_export_path
+from app.workbench_session import WorkbenchSession
+from app.workbench_editing import WorkbenchEditing
+from app.workbench_tasks import WorkbenchTasks
 from app.workbench_ui import apply_workbench_styles, build_workbench_shell
 from desktop_workbench_base import DesktopApp as LegacyWorkbench
-
-
-legacy_base.VERSION = APP_VERSION
-legacy_base.build_documents = build_documents
-internal_preview_core.adjusted_layout = adjusted_layout
 
 
 def typeset_name(value: str) -> str:
@@ -187,13 +178,29 @@ class ExportWarningDialog(tk.Toplevel):
         self.destroy()
 
 
-class CurrentDesktopApp(LegacyWorkbench):
+class CurrentDesktopApp(WorkbenchSession, WorkbenchTasks, WorkbenchEditing, LegacyWorkbench):
     """Context-sensitive left inspector paired with a read-only A4 preview."""
 
     def __init__(self, *, check_updates: bool = True) -> None:
         self._closing = False
         self._ui_messages: queue.Queue = queue.Queue()
         self._preview_ticket = 0
+        self._session_generation = 0
+        self._revision = 0
+        self._proof_requested = False
+        self._requested_revision = None
+        self._displayed_revision = None
+        self._import_in_progress = False
+        self._export_in_progress = False
+        self._import_future = None
+        self._import_generation = 0
+        self._pending_update = None
+        self._locked_controls = []
+        self._autosave_after = None
+        self._preview_warnings = ()
+        self._recovery_claim = None
+        self._recovered_path = None
+        self._recovery = DraftRecovery(self._ui_settings_path().parent / "recovery")
         self._saved_signature = ""
         self._global_invalid = False
         self._settings_feedback: dict[str, Any] | None = None
@@ -241,7 +248,7 @@ class CurrentDesktopApp(LegacyWorkbench):
         self._search_after: str | None = None
         self._ui_sash_initialized = False
         self._warning_refreshing = False
-        super().__init__()
+        super().__init__(legacy_tasks=False)
         width = min(1500, self.winfo_screenwidth() - 60)
         height = min(940, self.winfo_screenheight() - 100)
         self.geometry(f"{width}x{height}")
@@ -268,14 +275,17 @@ class CurrentDesktopApp(LegacyWorkbench):
         self.after(60, self._poll_ui_messages)
         self.stem_text.bind("<ButtonRelease-1>", self._cursor_style_event, add="+")
         self.status_var.set("内置示例已就绪。导入 Word 开始排版，修改会自动同步到预览。")
+        self._startup_preview_pending = True
         self.after(300, self._release_startup_preview)
         if check_updates:
+            self.after(450, lambda: self.recover_draft(automatic=True))
             self.after(6000, lambda: self.check_for_updates(automatic=True))
         self._set_application_icon()
         for shortcut, command in (("<Control-o>", self.import_new_exam), ("<Control-s>", self.save_project),
                                   ("<Control-e>", self.open_export_dialog), ("<Control-f>", self.focus_search),
                                   ("<F5>", self.request_preview)):
             self.bind(shortcut, lambda _event, action=command: (action(), "break")[-1])
+        self.bind("<Control-Shift-S>", lambda _e: (self.save_project(save_as=True), "break")[-1])
         self.bind("<Control-z>", self.undo_action)
         self.bind("<Control-y>", self.redo_action)
 
@@ -531,18 +541,6 @@ class CurrentDesktopApp(LegacyWorkbench):
             end_line -= 1
         return list(range(start_line - 1, end_line))
 
-    def _push_direct_history(self) -> None:
-        """Record one complete-document snapshot before inspector changes."""
-
-        if not hasattr(self, "undo_stack"):
-            return
-        self.undo_stack.append(deepcopy(self.raw_exam))
-        if len(self.undo_stack) > 60:
-            self.undo_stack.pop(0)
-        self.redo_stack.clear()
-        self.history_transaction_open = False
-        self.after_idle(self._refresh_history_buttons)
-
     @staticmethod
     def _score_difference_text(summary: ScoreSummary) -> str:
         """Describe the distance between entered scores and the 150-point target."""
@@ -577,196 +575,13 @@ class CurrentDesktopApp(LegacyWorkbench):
         if hasattr(self, "document_editor"):
             self.document_editor.change_zoom(delta)
 
-    def _release_startup_preview(self) -> None:
-        """Release the delayed first preview after the main window is ready."""
-
-        self._startup_preview_deferred = False
-        if self._startup_preview_pending:
-            self._startup_preview_pending = False
-            self.request_preview()
-
-    def _run_canvas_preview(self) -> None:
-        """Run the debounced preview request scheduled by inspector edits."""
-
-        self._canvas_preview_after = None
-        self.request_preview()
-
-    def request_preview(self) -> None:
-        """Preview is cancellable background work, not a lock on exporting."""
-        if self._closing:
-            return
-        if getattr(self, "_export_in_progress", False) or getattr(self, "_import_in_progress", False):
-            return
-        """Submit one cancellable internal-preview task for the current draft."""
-
-        if getattr(self, "_startup_preview_deferred", False):
-            self._startup_preview_pending = True
-            return
-        if self.busy:
-            self._preview_service.cancel()
-            self.busy = False
-            self.busy_bar.stop()
-        if not self._flush_edits(show_error=False):
-            return
-        selection = self.tree.selection()
-        if selection and selection[0].startswith("block-"):
-            self._pending_preview_block = int(selection[0].split("-", 1)[1])
-        raw = self.raw_exam
-        self._preview_ticket += 1
-        ticket = self._preview_ticket
-        self.busy = True
-        self.busy_bar.start(12)
-        self.status_var.set("正在生成预览，请稍候…")
-        self._preview_settings_feedback = deepcopy(self._settings_feedback)
-        if self._preview_settings_feedback is not None:
-            self._set_settings_message("设置已应用，正在更新预览…")
-        try:
-            self._preview_generation = self._preview_service.submit(
-                raw,
-                self.layout_path,
-                self.template_path,
-                lambda result: self._ui_messages.put(("preview", ticket, result)),
-            )
-        except Exception as exc:  # noqa: BLE001
-            self._finish_task_error(exc)
-
-    def _receive_preview_result(self, result: PreviewResult | Exception) -> None:
-        """Workers never call Tk, including during shutdown."""
-        self._ui_messages.put(("preview", self._preview_ticket, result))
-
-    def _poll_ui_messages(self) -> None:
-        if self._closing:
-            return
-        try:
-            while True:
-                kind, ticket, result = self._ui_messages.get_nowait()
-                if kind == "preview" and ticket == self._preview_ticket:
-                    self._finish_preview(result)
-                elif kind == "export" and ticket == self._export_generation:
-                    self._finish_export(result)
-        except queue.Empty:
-            pass
-        self.after(60, self._poll_ui_messages)
-
-    def _cancel_preview(self) -> None:
-        self._preview_ticket += 1
-        self._preview_service.cancel()
-        self.busy = False
-        self.busy_bar.stop()
-
-    def _finish_task_error(self, error: Exception) -> None:
-        """Stop the busy indicators and show an actionable preview error."""
-
-        self.busy = False
-        self.busy_bar.stop()
-        self.status_var.set("任务失败，请查看提示")
-        if self._settings_feedback is not None:
-            self._set_settings_message("预览更新失败；设置已保留，点击“应用并查看”重试。")
-        try:
-            messagebox.showerror(APP_TITLE, str(error), parent=self)
-        except tk.TclError:
-            return
-
-    def start_export(
-        self,
-        output_dir: Path,
-        basename: str,
-        export_docx: bool,
-        export_pdf: bool,
-    ) -> None:
-        """Export the current draft through the unified DOCX pipeline."""
-
-        if getattr(self, "_export_in_progress", False) or getattr(self, "_import_in_progress", False):
-            messagebox.showinfo(APP_TITLE, "请等待当前任务完成。", parent=self)
-            return
-        if not self._flush_edits(show_error=True):
-            return
-        self._cancel_preview()
-        safe_name = basename.strip() or "语文试卷"
-        # The save dialog has already confirmed this exact path.
-        destination = output_dir / f"{safe_name}.docx"
-        if self.current_exam_path and destination.resolve() == self.current_exam_path.resolve():
-            messagebox.showwarning(APP_TITLE, "请选择新的文件名，以保留导入的 Word 原件。", parent=self)
-            return
-        raw = deepcopy(self.raw_exam)
-        self._export_signature = draft_signature(raw)
-        template = self.template_path
-        self._export_generation += 1
-        self._export_in_progress = True
-        generation = self._export_generation
-        self.busy = True
-        self.busy_bar.start(12)
-        self.status_var.set("正在导出 Word 文件，请稍候…")
-
-        def worker() -> tuple[int, Path | None, Path | None, str] | Exception:
-            try:
-                docx, pdf, engine = build_documents(
-                    raw,
-                    self.layout_path,
-                    output_dir,
-                    safe_name,
-                    template_path=template,
-                    export_docx=export_docx,
-                    export_pdf=export_pdf,
-                    temporary_dir=self.temp_dir,
-                )
-                return generation, docx, pdf, engine
-            except Exception as exc:  # noqa: BLE001
-                return exc
-
-        future = self._export_executor.submit(worker)
-
-        def done(completed: Any) -> None:
-            try:
-                result = completed.result()
-            except Exception as exc:
-                result = exc
-            self._ui_messages.put(("export", generation, result))
-
-        future.add_done_callback(done)
-
-    def _finish_export(self, result: Any) -> None:
-        """Publish export completion on the Tk thread."""
-        self._export_in_progress = False
-        if isinstance(result, ExportDestinationError):
-            self.busy = False
-            self.busy_bar.stop()
-            self.status_var.set("目标 Word 文件正被占用或不可写")
-            retry = messagebox.askretrycancel(
-                "无法保存 Word 文件",
-                f"{result}\n\n关闭目标文件后点击“重试”；也可以点击“取消”，"
-                "重新导出并选择其他文件名。",
-                parent=self,
-            )
-            if retry:
-                target = result.target
-                self.after(100, lambda: self.start_export(target.parent, target.stem, True, False))
-            return
-        if isinstance(result, Exception):
-            self._finish_task_error(result)
-            return
-        generation, docx, pdf, engine = result
-        if generation != self._export_generation:
-            return
-        self.busy = False
-        self.busy_bar.stop()
-        self.status_var.set("正式文件已导出")
-        if docx:
-            self._last_export_path = Path(docx)
-            self._saved_signature = self._export_signature
-            self.result_var.set(f"已导出  ·  {Path(docx).name}")
-            self.result_bar.pack(fill=tk.X, side=tk.BOTTOM)
-            self._refresh_history_buttons()
-        if self._export_signature != draft_signature(self.raw_exam):
-            self.status_var.set("文件已导出；导出期间的新修改尚未导出。")
-        self._schedule_canvas_preview()
-
     def _create_variables(self) -> None:
         super()._create_variables()
-        self.target_pages_var = tk.StringVar(master=self, value="8")
         self.layout_preset_var = tk.StringVar(master=self, value=PRESET_LABELS[DEFAULT_PRESET])
         self.search_var = tk.StringVar()
         self.warning_var = tk.StringVar()
+        self.format_error_var = tk.StringVar()
+        self._invalid_option = False
         self.batch_scope_var = tk.StringVar(value="当前题目")
         self.margin_top_var = tk.StringVar(value="20")
         self.margin_bottom_var = tk.StringVar(value="18")
@@ -863,7 +678,9 @@ class CurrentDesktopApp(LegacyWorkbench):
             wraplength=470,
             font=("Microsoft YaHei UI", 9, "bold"),
         )
-        self.warning_banner.pack(fill=tk.X, pady=(0, 6))
+        self.warning_banner.pack(fill=tk.X, pady=(0, 2))
+        self.review_panel = ReviewPanel(parent, self._go_to_issue)
+        self.review_panel.pack(fill=tk.X, pady=(0, 5))
 
         self.editor_pane = ttk.Panedwindow(parent, orient=tk.VERTICAL)
         self.editor_pane.pack(fill=tk.BOTH, expand=True)
@@ -969,6 +786,9 @@ class CurrentDesktopApp(LegacyWorkbench):
         self._build_options_group(self.options_group.body)
         self._build_pagination_group(self.pagination_group.body)
         self._build_global_group(self.global_group.body)
+        for panel in (self.font_group.body, self.paragraph_group.body, self.options_group.body):
+            ttk.Label(panel, textvariable=self.format_error_var, foreground="#9D2D18").grid(
+                row=panel.grid_size()[1], column=0, columnspan=4, sticky=tk.W)
         self._show_groups({"内容与题型", "整卷设置"})
 
     def _build_content_group(self, parent: ttk.Frame) -> None:
@@ -1155,28 +975,7 @@ class CurrentDesktopApp(LegacyWorkbench):
     def _build_global_group(self, parent: ttk.Frame) -> None:
         build_page_settings(self, parent, CollapsibleGroup)
 
-    def _pagination_mode_changed(self, _event=None) -> None:
-        if self.pagination_mode_var.get() == "自然分页":
-            self.target_pages_var.set("0")
-        else:
-            self.target_pages_var.set("8")
-        self._sync_pagination_mode()
-
-    def _sync_pagination_mode(self) -> None:
-        if "pagination_mode_var" not in self.__dict__:
-            return
-        natural = self.target_pages_var.get().strip() == "0"
-        self.pagination_mode_var.set("自然分页" if natural else "目标页数")
-        if natural:
-            self.target_pages_entry.pack_forget()
-            self.target_pages_suffix.pack_forget()
-        else:
-            self.target_pages_entry.pack(side=tk.LEFT, padx=(10, 4))
-            self.target_pages_suffix.pack(side=tk.LEFT)
-
     def _scope_changed(self, _event=None) -> None:
-        practice = self.document_scope_var.get() == "局部训练"
-        self.target_pages_var.set("0" if practice else "8")
         self._commit_global_settings(show_error=True)
         self._refresh_score_display()
 
@@ -1198,12 +997,7 @@ class CurrentDesktopApp(LegacyWorkbench):
     def _build_preview_panel(self, parent: ttk.Frame) -> None:
         self.document_editor = ReadOnlyPreview(
             parent,
-            on_select=lambda _key: None,
-            on_change=lambda _key, _value, _old: None,
-            on_inline_format=lambda _key, _start, _end, _spec: None,
-            on_undo=lambda: self.undo_action(),
-            on_redo=lambda: self.redo_action(),
-            status_variable=self.page_status_var,
+            status_variable=self.page_status_var, on_print_proof=self.toggle_print_proof,
         )
         self.document_editor.pack(fill=tk.BOTH, expand=True)
         self.canvas = self.document_editor.canvas
@@ -1238,7 +1032,6 @@ class CurrentDesktopApp(LegacyWorkbench):
             self.exam_name_var,
             self.subject_name_var,
             self.exam_meta_var,
-            self.target_pages_var,
             self.margin_top_var,
             self.margin_bottom_var,
             self.margin_left_var,
@@ -1246,7 +1039,8 @@ class CurrentDesktopApp(LegacyWorkbench):
         ):
             variable.trace_add("write", lambda *_args: self._schedule_global_commit())
         self.search_var.trace_add("write", lambda *_args: self._schedule_search())
-        self.stem_text.bind("<KeyRelease>", self._schedule_text_commit)
+        self.stem_text.edit_modified(False)
+        self.stem_text.bind("<<Modified>>", self._editor_text_modified, add="+")
         self.stem_text.bind("<ButtonRelease-1>", lambda _event: self.after(20, self._selection_status), add="+")
         self.score_entry.bind("<Return>", self._commit_score_entry, add="+")
         self.score_entry.bind("<FocusOut>", self._commit_score_entry, add="+")
@@ -1576,11 +1370,14 @@ class CurrentDesktopApp(LegacyWorkbench):
             self._select_object(str(selection[0]), navigate=True)
 
     def _load_content_object(self, item: ContentObject) -> None:
+        self.format_error_var.set("")
+        self._invalid_option = False
         spec = paragraph_format_for(self.raw_exam, item)
         self.loading_fields = True
         try:
             self.stem_text.delete("1.0", tk.END)
             self.stem_text.insert("1.0", item.text)
+            self.stem_text.edit_modified(False)
             self.current_line_map = [{"target": item.target, "target_index": item.target_index}]
             self.current_paragraph_formats = []
             owner = format_owner(self.raw_exam, item)
@@ -1741,200 +1538,28 @@ class CurrentDesktopApp(LegacyWorkbench):
                     self.stem_text.tag_add(name, f"1.0+{index}c", f"1.0+{index + 1}c")
         self.stem_text.tag_raise(tk.SEL)
 
-    def _schedule_text_commit(self, _event: object | None = None) -> None:
-        if self.loading_fields or self.selected_content_object is None:
-            return
-        if self._text_commit_after:
-            self.after_cancel(self._text_commit_after)
-        self.status_var.set("文字已修改，正在等待同步…")
-        self._text_commit_after = self.after(600, self._commit_text_after_delay)
-
-    def _commit_text_after_delay(self) -> None:
-        self._text_commit_after = None
-        self._commit_current_text(schedule_preview=True)
-
-    def _commit_current_text(self, *, schedule_preview: bool) -> bool:
-        item = self.selected_content_object
-        if item is None or self.loading_fields:
-            return False
-        value = self.stem_text.get("1.0", "end-1c")
-        if value == item.text:
-            return False
-        self._push_direct_history()
-        set_content_object_text(self.raw_exam, item, value)
-        updated = ContentObject(
-            item.key,
-            item.block_index,
-            item.target,
-            item.target_index,
-            item.role,
-            item.label,
-            value,
-            item.line_index,
-        )
-        self.selected_content_object = updated
-        self._content_objects = [updated if current.key == item.key else current for current in self._content_objects]
-        if self.object_tree.exists(item.key):
-            self.object_tree.item(item.key, values=(summary_text(updated),))
-        self._update_tree_block_label(item.block_index)
-        if item.block_index is None:
-            self._load_global_fields()
-        self.status_var.set("内容已同步，正在更新预览。")
-        if schedule_preview:
-            self._schedule_canvas_preview()
-        return True
-
-    def _identity_changed(self) -> None:
-        if self.loading_fields or self.selected_block_index is None:
-            return
-        block = self.raw_exam["blocks"][self.selected_block_index]
-        if block.get("type") != "question":
-            return
-        score_text = self.score_var.get().strip()
-        if score_text and parse_score(score_text) is None:
-            self.warning_var.set("当前分值格式需要检查，分值可留空后继续编辑。")
-            return
-        question = block["question"]
-        kind = "objective" if self.kind_var.get() == "客观题" else "subjective"
-        score = None if not score_text else float(parse_score(score_text) or Decimal("0"))
-        if question.get("kind") == kind and question.get("score") == score:
-            return
-        self._push_direct_history()
-        question["kind"], question["score"] = kind, score
-        self._update_tree_block_label(self.selected_block_index)
-        self._refresh_score_display()
-        self._schedule_canvas_preview()
-
-    def _font_changed(self) -> None:
-        if self.loading_fields or self.selected_content_object is None:
-            return
-        try:
-            self._format_spec_from_controls()
-            font_spec = {
-                "font": self.font_var.get(),
-                "size_pt": float(self.size_var.get()),
-                "bold": self.bold_var.get(),
-            }
-        except ValueError:
-            return
-        self._push_direct_history()
-        ranges = self.stem_text.tag_ranges(tk.SEL)
-        if ranges:
-            start = int(self.stem_text.count("1.0", ranges[0], "chars")[0])
-            end = int(self.stem_text.count("1.0", ranges[1], "chars")[0])
-            set_inline_format(self.raw_exam, self.selected_content_object, start, end, font_spec)
-            self.selection_hint_var.set("字体已应用到选中文字。")
-        else:
-            spec = self._format_spec_from_controls()
-            set_paragraph_format(self.raw_exam, self.selected_content_object, spec)
-            self.selection_hint_var.set("字体已应用到当前内容对象。")
-        self._render_object_editor_style(
-            self.selected_content_object,
-            paragraph_format_for(self.raw_exam, self.selected_content_object),
-        )
-        self._schedule_canvas_preview()
-
-    def _paragraph_changed(self) -> None:
-        if self.loading_fields or self.selected_content_object is None:
-            return
-        try:
-            spec = self._format_spec_from_controls()
-        except ValueError:
-            return
-        self._push_direct_history()
-        set_paragraph_format(self.raw_exam, self.selected_content_object, spec)
-        self._schedule_canvas_preview()
-
-    def _format_spec_from_controls(self) -> dict[str, Any]:
-        special = self.special_indent_var.get()
-        amount = float(self.special_indent_amount_var.get())
-        first = amount if special == "首行" else (-amount if special == "悬挂" else 0.0)
-        return validate_format({
-            "font": self.font_var.get(),
-            "size_pt": float(self.size_var.get()),
-            "bold": self.bold_var.get(),
-            "left_indent_chars": float(self.left_indent_var.get()),
-            "right_indent_chars": float(self.right_indent_var.get()),
-            "special_indent": special,
-            "special_indent_chars": amount,
-            "first_line_indent_chars": first,
-            "alignment": self.alignment_var.get(),
-            "line_spacing": float(self.line_spacing_var.get()),
-            "space_before_pt": float(self.space_before_var.get()),
-            "space_after_pt": float(self.space_after_var.get()),
-            "keep_with_next": self.keep_next_var.get(),
-            "page_break_before": self.page_break_var.get(),
-            "indent_origin": "paragraph" if self.raw_exam.get("metadata", {}).get("layout_preset") == "national_ii_2026" else "first_line",
-        })
-
-    def _options_changed(self) -> None:
-        if self.loading_fields or self.selected_block_index is None:
-            return
-        block = self.raw_exam["blocks"][self.selected_block_index]
-        if block.get("type") != "question":
-            return
-        try:
-            size = float(self.option_size_var.get())
-            left = float(self.option_left_var.get())
-            hanging = float(self.option_hanging_var.get())
-            if not (5 <= size <= 72 and 0 <= left <= 20 and 0 <= hanging <= 20):
-                raise ValueError("选择项参数超出范围")
-        except ValueError:
-            return
-        self._push_direct_history()
-        question = block["question"]
-        question["option_layout"] = "two_column" if self.option_layout_var.get() == "两行两列" else "vertical"
-        question.setdefault("format", {}).update(
-            {
-                "option_font": self.option_font_var.get(),
-                "option_size_pt": size,
-                "option_left_indent_chars": left,
-                "option_hanging_indent_chars": hanging,
-            }
-        )
-        self._schedule_canvas_preview()
-
-    def _apply_same_type(self) -> None:
-        item = self.selected_content_object
-        if item is None:
-            return
-        try:
-            spec = self._format_spec_from_controls()
-        except ValueError:
-            messagebox.showerror(APP_TITLE, "格式参数需要填写数字。", parent=self)
-            return
-        targets = objects_in_scope(self.raw_exam, item, self.batch_scope_var.get())
-        self._push_direct_history()
-        for target in targets:
-            set_paragraph_format(self.raw_exam, target, spec)
-        self.status_var.set(f"已将格式应用到 {len(targets)} 个同类型内容对象。")
-        self._schedule_canvas_preview()
-
     def _schedule_global_commit(self) -> None:
+        if self._import_in_progress:
+            return
         if self.loading_fields:
             return
         if self._global_commit_after:
             self.after_cancel(self._global_commit_after)
-        self._sync_pagination_mode()
         self._set_settings_message("设置已修改，正在等待更新…")
-        if self.busy:
-            self._cancel_preview()
-        self._global_commit_after = self.after(600, lambda: self._commit_global_settings(show_error=False))
+        self._invalidate_edit()
+        self._global_commit_after = self.after(280, lambda: self._commit_global_settings(show_error=False))
 
     def _commit_global_settings(self, *, show_error: bool) -> bool:
         if self._global_commit_after:
             self.after_cancel(self._global_commit_after)
         self._global_commit_after = None
         try:
-            target_pages = int(self.target_pages_var.get().strip())
             margins = {
                 "margin_top_mm": float(self.margin_top_var.get()),
                 "margin_bottom_mm": float(self.margin_bottom_var.get()),
                 "margin_left_mm": float(self.margin_left_var.get()),
                 "margin_right_mm": float(self.margin_right_var.get()),
             }
-            if not 0 <= target_pages <= 32:
-                raise ValueError("目标页数应在 0 到 32 之间，0 表示按内容自然分页。")
             if any(not 5 <= value <= 45 for value in margins.values()):
                 raise ValueError("页边距应在 5 到 45 毫米之间。")
         except ValueError as exc:
@@ -1947,7 +1572,7 @@ class CurrentDesktopApp(LegacyWorkbench):
         metadata = self.raw_exam.setdefault("metadata", {})
         updates = {"exam_name": self.exam_name_var.get().strip(),
                    "subject_name": self.subject_name_var.get().strip(),
-                   "meta_text": self.exam_meta_var.get().strip(), "target_pages": target_pages,
+                   "meta_text": self.exam_meta_var.get().strip(),
                    "layout_preset": DEFAULT_PRESET,
                    "document_scope": "practice" if self.document_scope_var.get() == "局部训练" else "full_exam",
                    "page_overrides": margins}
@@ -1970,6 +1595,8 @@ class CurrentDesktopApp(LegacyWorkbench):
         return True
 
     def apply_global_settings(self) -> None:
+        if self._import_in_progress:
+            return
         if not self._commit_global_settings(show_error=True):
             return
         if self._settings_feedback is None:
@@ -1999,13 +1626,13 @@ class CurrentDesktopApp(LegacyWorkbench):
         super()._load_global_fields()
         metadata = self.raw_exam.setdefault("metadata", {})
         metadata["layout_preset"] = DEFAULT_PRESET
+        use_natural_pagination(metadata)
         page = load_layout(self.layout_path).get("page", {})
         overrides = metadata.get("page_overrides", {})
         defaults = preset_page(self.raw_exam, DEFAULT_PRESET)
         self.loading_fields = True
         try:
             self.layout_preset_var.set(PRESET_LABELS[DEFAULT_PRESET])
-            self.target_pages_var.set(str(metadata.get("target_pages", 8)))
             if hasattr(self, "document_scope_var"):
                 self.document_scope_var.set("局部训练" if metadata.get("document_scope") == "practice" else "全卷")
             self.margin_top_var.set(str(overrides.get("margin_top_mm", defaults.get("margin_top_mm", page.get("margin_top_mm", 25.4)))))
@@ -2014,7 +1641,6 @@ class CurrentDesktopApp(LegacyWorkbench):
             self.margin_right_var.set(str(overrides.get("margin_right_mm", defaults.get("margin_right_mm", page.get("margin_right_mm", 31.75)))))
         finally:
             self.loading_fields = False
-        self._sync_pagination_mode()
 
     def apply_current_question(self, *, silent: bool = False) -> bool:
         self._commit_current_text(schedule_preview=False)
@@ -2036,6 +1662,8 @@ class CurrentDesktopApp(LegacyWorkbench):
         return True
 
     def _commit_score_entry(self, _event: object | None = None) -> str:
+        if self._import_in_progress:
+            return "break"
         if self.score_var.get().strip() and parse_score(self.score_var.get()) is None:
             self.warning_var.set("当前题分值格式需要检查，分值可留空后继续编辑。")
             return "break"
@@ -2098,68 +1726,27 @@ class CurrentDesktopApp(LegacyWorkbench):
             diagnostics = self.raw_exam.get("diagnostics", [])
             if diagnostics:
                 warnings.append(f"另有 {len(diagnostics)} 条识别提示")
+            if self._preview_warnings:
+                warnings.append(f"预览提示 {len(self._preview_warnings)} 条")
             self.warning_var.set("；".join(warnings) if warnings else "结构与分值检查暂无提醒")
+            self.review_panel.set_items(review_items(self.raw_exam, self._preview_warnings))
         finally:
             self._warning_refreshing = False
 
-    def _schedule_canvas_preview(self) -> None:
-        if self._canvas_preview_after:
-            self.after_cancel(self._canvas_preview_after)
-        self._canvas_preview_after = self.after(260, self._run_canvas_preview)
-
-    def _finish_preview(self, result: object) -> None:
-        if isinstance(result, Exception):
-            self._finish_task_error(result)
+    def _go_to_issue(self, index) -> None:
+        if self._import_in_progress:
             return
-        if result.generation != self._preview_generation:
-            return
-        self.busy = False
-        self.busy_bar.stop()
-        object_locators = build_object_locators(self.raw_exam, result.locators)
-        selected_key: object = self.selected_block_index
-        if self.selected_content_object is not None:
-            selected_key = self.selected_content_object.key
-        loaded = self.document_editor.set_preview_pages(
-            list(result.pages),
-            locators=object_locators,
-            actual_pages=result.actual_pages,
-            raw_exam=self.raw_exam,
-            selected_key=selected_key,
-        )
-        if not loaded:
-            self._finish_task_error(OSError(self.document_editor.update_message_var.get()))
-            return
-        self._preview_block_locators = dict(result.locators)
-        self.preview_pages = list(result.pages)
-        self.raw_exam.setdefault("metadata", {})["page_spacing_scale"] = result.spacing_scale
-        self.preview_page_index = min(self.preview_page_index, max(0, len(self.preview_pages) - 1))
-        feedback = self._preview_settings_feedback
-        if feedback is not None:
-            page_index = max(0, min(feedback["page"], len(result.pages) - 1))
-            changed = page_index in self.document_editor.changed_pages
-            visible = "画面已更新" if changed else "画面无变化"
-            message = f"整卷设置已应用 · 第 {page_index + 1} 页{visible}"
-            if feedback.get("header_changed"):
-                message += " · 已定位卷首"
-            elif not changed:
-                message += "，其他页面可能受影响"
-            self.document_editor.show_page_update(page_index, message)
-            self._set_settings_message(message)
-            self._settings_feedback = None
-            self._preview_settings_feedback = None
-        document_kind = str(self.raw_exam.get("document_kind", "exam"))
-        if document_kind == "exam_with_answer":
-            self.status_var.set(
-                f"预览估算 {result.actual_pages} 页（含答案）；打印分页以 Word 文档为准"
-            )
-        elif document_kind == "answer":
-            self.status_var.set(f"答案预览估算 {result.actual_pages} 页；打印分页以 Word 文档为准")
-        else:
-            target_text = f"目标 {result.target_pages} 页" if result.target_pages else "自然分页"
-            self.status_var.set(f"预览估算 {result.actual_pages} 页，{target_text}；打印分页以 Word 文档为准")
-        if getattr(result, "warnings", ()):
-            self.warning_var.set("预览提示：" + "；".join(result.warnings))
-        # Preserve the reader's viewport; explicit structure selection navigates.
+        if self.search_var.get():
+            self.search_var.set("")
+            self._populate_tree()
+        item = self.root_iid if index is None else f"block-{index}"
+        if self.tree.exists(item):
+            self.tree.selection_set(item)
+            self.tree.see(item)
+            self._on_tree_select(None)
+            self.inspector_tabs.select(0)
+            if index is not None:
+                self._jump_to_block(index)
 
     def _jump_to_block(self, block_index: int) -> None:
         key: object = block_index
@@ -2184,34 +1771,6 @@ class CurrentDesktopApp(LegacyWorkbench):
         elif self.selected_content_object is not None:
             self.selection_hint_var.set(f"当前对象：{self.selected_content_object.label}。段落设置作用于整个对象。")
 
-    def undo_action(self, _event: object | None = None) -> str:
-        self._flush_edits(show_error=False)
-        if not self.undo_stack:
-            return "break"
-        if self.history_transaction_open:
-            self.apply_current_question(silent=True)
-        self.redo_stack.append(deepcopy(self.raw_exam))
-        self.raw_exam = self.undo_stack.pop()
-        self.history_transaction_open = False
-        self.selection_dirty = False
-        self._restore_selection()
-        self._refresh_history_buttons()
-        self.request_preview()
-        return "break"
-
-    def redo_action(self, _event: object | None = None) -> str:
-        self._flush_edits(show_error=False)
-        if not self.redo_stack:
-            return "break"
-        self.undo_stack.append(deepcopy(self.raw_exam))
-        self.raw_exam = self.redo_stack.pop()
-        self.history_transaction_open = False
-        self.selection_dirty = False
-        self._restore_selection()
-        self._refresh_history_buttons()
-        self.request_preview()
-        return "break"
-
     def _restore_selection(self) -> None:
         key = self.selected_content_object.key if self.selected_content_object else None
         iid = f"block-{self.selected_block_index}" if self.selected_block_index is not None else self.root_iid
@@ -2233,124 +1792,6 @@ class CurrentDesktopApp(LegacyWorkbench):
         metadata = self.raw_exam.get("metadata", {})
         fallback = str(metadata.get("exam_name", "语文试卷"))
         return default_export_basename(self.current_exam_path, fallback)
-
-    def save_project(self) -> bool:
-        """Save the editable structured draft for later continuation."""
-
-        if not self._flush_edits(show_error=True):
-            return False
-        path = filedialog.asksaveasfilename(
-            title="保存可继续编辑的草稿",
-            defaultextension=".json",
-            filetypes=[("结构化试题", "*.json")],
-            initialfile=f"{self.default_export_basename()}.json",
-            parent=self,
-        )
-        if path:
-            try:
-                save_exam(self.raw_exam, path)
-            except (OSError, ValueError) as exc:
-                messagebox.showerror(APP_TITLE, f"草稿保存失败：{exc}", parent=self)
-                return False
-            self._project_path = Path(path)
-            self._saved_signature = draft_signature(self.raw_exam)
-            self.status_var.set(f"项目已保存：{path}")
-            self._refresh_history_buttons()
-            return True
-        return False
-
-    def import_new_exam(self) -> None:
-        """Open the Word-only import dialog."""
-
-        path = filedialog.askopenfilename(
-            title="导入 Word 试题",
-            filetypes=[
-                ("Word 文档", "*.docx *.doc"),
-                ("DOCX 文档", "*.docx"),
-                ("旧版 DOC 文档", "*.doc"),
-            ],
-        )
-        if path:
-            self._import_exam_path(Path(path))
-
-    def _handle_dropped_files(self, paths: tuple[Path, ...]) -> None:
-        """Accept the first dropped DOCX or DOC document."""
-
-        supported = [path for path in paths if path.suffix.lower() in {".docx", ".doc"}]
-        if not supported:
-            messagebox.showwarning(APP_TITLE, "请拖入 .docx 或 .doc 文件。", parent=self)
-            return
-        self._import_exam_path(supported[0])
-
-    def _import_exam_path(self, path: Path) -> None:
-        if getattr(self, "_export_in_progress", False):
-            messagebox.showinfo(APP_TITLE, "请等待当前导出完成后再导入试题。", parent=self)
-            return
-        if not self._confirm_replace():
-            return
-        # Keep Tk responsive; only apply the latest import on its UI thread.
-        self._import_generation = getattr(self, "_import_generation", 0) + 1
-        generation = self._import_generation
-        self._cancel_editor_timers()
-        self._cancel_preview()
-        self._import_in_progress = True
-        self.busy = False
-        self.busy_bar.stop()
-        self.status_var.set(f"正在读取：{path.name}")
-        future = self._export_executor.submit(import_exam, path)
-
-        def poll() -> None:
-            if self._closing:
-                return
-            if generation != self._import_generation:
-                future.cancel()
-                return
-            if not future.done():
-                self.after(40, poll)
-                return
-            try:
-                result = future.result()
-            except Exception as exc:
-                self._import_in_progress = False
-                self.status_var.set(f"导入失败：{path.name}")
-                messagebox.showerror(APP_TITLE, str(exc), parent=self)
-                return
-            self._import_in_progress = False
-            self._apply_imported_exam(path, result)
-
-        self.after(40, poll)
-
-    def _apply_imported_exam(self, path: Path, result: dict) -> None:
-        self._cancel_editor_timers()
-        self.selected_content_object = None
-        self._content_objects = []
-        self.selected_block_index = None
-        try:
-            self.raw_exam = result
-        except (OSError, ValueError, RuntimeError) as exc:
-            messagebox.showerror(APP_TITLE, str(exc), parent=self)
-            return
-        self.current_exam_path = path
-        self._project_path = None
-        self.file_label_var.set(path.name)
-        self.result_bar.pack_forget()
-        self.loading_fields = True
-        self.search_var.set("")
-        self.loading_fields = False
-        self.selected_block_index = None
-        if hasattr(self, "undo_stack"):
-            self.undo_stack.clear()
-            self.redo_stack.clear()
-        self._populate_tree()
-        self._load_global_fields()
-        self._saved_signature = draft_signature(self.raw_exam)
-        self._refresh_history_buttons()
-        diagnostics = self.raw_exam.get("diagnostics", [])
-        suffix = f"，识别提示 {len(diagnostics)} 条" if diagnostics else ""
-        self.status_var.set(f"已导入：{path.name}{suffix}")
-        self._select_first_question()
-        self.request_preview()
-        self._refresh_score_display()
 
     def open_export_dialog(self) -> None:
         if getattr(self, "_export_in_progress", False) or getattr(self, "_import_in_progress", False):
@@ -2375,6 +1816,7 @@ class CurrentDesktopApp(LegacyWorkbench):
             dialog = ExportWarningDialog(self, lines)
             self.wait_window(dialog)
             if not dialog.result:
+                self._schedule_canvas_preview()
                 return
         directory = self.current_exam_path.parent if self.current_exam_path else Path.home() / "Documents"
         if self._last_export_path:
@@ -2413,6 +1855,8 @@ class CurrentDesktopApp(LegacyWorkbench):
 
     @staticmethod
     def _ui_settings_path() -> Path:
+        if override := os.environ.get("EXAM_TYPESETTER_STATE_DIR"):
+            return Path(override) / "ui.json"
         root = Path(os.environ.get("LOCALAPPDATA", Path.home()))
         return root / "SuoyiExamTypesetter" / "ui.json"
 
@@ -2454,6 +1898,8 @@ class CurrentDesktopApp(LegacyWorkbench):
         self.detail_canvas.itemconfigure(self.detail_window, width=width)
 
     def _on_tree_select(self, event: object | None) -> None:
+        if self._import_in_progress:
+            return
         selection = self.tree.selection()
         if not selection:
             return
@@ -2504,105 +1950,9 @@ class CurrentDesktopApp(LegacyWorkbench):
 
         return
 
-    def _restore_group(self, group: str) -> None:
-        if group == "global":
-            self._restore_global_group()
-            return
-        if group == "options":
-            self._restore_options_group()
-            return
-        item = self.selected_content_object
-        if item is None:
-            return
-        self._push_direct_history()
-        current = inspector_model.paragraph_format_for(self.raw_exam, item)
-        template = inspector_model.default_format_for_exam(self.raw_exam, item)
-        if group == "font":
-            keys = ("font", "size_pt", "bold")
-        elif group == "pagination":
-            keys = ("keep_with_next", "page_break_before")
-        else:
-            keys = (
-                "left_indent_chars",
-                "right_indent_chars",
-                "special_indent",
-                "special_indent_chars",
-                "first_line_indent_chars",
-                "alignment",
-                "line_spacing",
-                "space_before_pt",
-                "space_after_pt",
-                "indent_origin",
-            )
-        for key in keys:
-            current[key] = template[key]
-        inspector_model.set_paragraph_format(self.raw_exam, item, current)
-        self._load_content_object(item)
-        self.status_var.set("已恢复当前分组的模板值。")
-        self._schedule_canvas_preview()
-
-    def _restore_global_group(self) -> None:
-        """Restore pagination defaults without replacing imported exam text."""
-
-        self._push_direct_history()
-        if self._global_commit_after:
-            self.after_cancel(self._global_commit_after)
-            self._global_commit_after = None
-        margins = preset_page(self.raw_exam, DEFAULT_PRESET)
-        metadata = self.raw_exam.setdefault("metadata", {})
-        metadata["target_pages"] = 0 if metadata.get("document_scope") == "practice" else 8
-        metadata["layout_preset"] = DEFAULT_PRESET
-        metadata["page_overrides"] = margins
-        self.loading_fields = True
-        try:
-            if "layout_preset_var" in self.__dict__:
-                self.layout_preset_var.set(PRESET_LABELS[DEFAULT_PRESET])
-            self.target_pages_var.set(str(metadata["target_pages"]))
-            self.margin_top_var.set(str(margins["margin_top_mm"]).rstrip("0").rstrip("."))
-            self.margin_bottom_var.set(str(margins["margin_bottom_mm"]).rstrip("0").rstrip("."))
-            self.margin_left_var.set(str(margins["margin_left_mm"]).rstrip("0").rstrip("."))
-            self.margin_right_var.set(str(margins["margin_right_mm"]).rstrip("0").rstrip("."))
-        finally:
-            self.loading_fields = False
-        self.status_var.set("已恢复目标页数和页边距模板值。")
-        self._sync_pagination_mode()
-        self._queue_settings_feedback()
-        self._set_settings_message("已恢复模板值，正在更新预览…")
-        self._schedule_canvas_preview()
-
-    def _restore_options_group(self) -> None:
-        """Restore the confirmed choice-option defaults for the selected question."""
-
-        if self.selected_block_index is None:
-            return
-        block = self.raw_exam["blocks"][self.selected_block_index]
-        if block.get("type") != "question":
-            return
-        self._push_direct_history()
-        question = block["question"]
-        question["option_layout"] = "vertical"
-        question.setdefault("format", {}).update(
-            {
-                "option_font": "宋体",
-                "option_size_pt": 10.5,
-                "option_left_indent_chars": 1.5,
-                "option_hanging_indent_chars": 1.7,
-                "option_indent_origin": "paragraph",
-            }
-        )
-        self.loading_fields = True
-        try:
-            self.option_layout_var.set("四行单列")
-            self.option_font_var.set("宋体")
-            self.option_size_var.set("10.5")
-            self.option_left_var.set("1.5")
-            self.option_hanging_var.set("1.7")
-        finally:
-            self.loading_fields = False
-        self.status_var.set("已恢复选择项模板值。")
-        self._schedule_canvas_preview()
-
     def _select_object(self, key: str, *, navigate: bool) -> None:
+        if self._import_in_progress:
+            return
         if self.selected_content_object is not None and self.selected_content_object.key == key:
             return
         item = next((value for value in self._content_objects if value.key == key), None)
@@ -2629,7 +1979,9 @@ class CurrentDesktopApp(LegacyWorkbench):
         files.add_command(label="导入 Word…", accelerator="Ctrl+O", command=self.import_new_exam)
         files.add_command(label="导出 Word…", accelerator="Ctrl+E", command=self.open_export_dialog)
         files.add_separator()
-        files.add_command(label="保存草稿…", accelerator="Ctrl+S", command=self.save_project)
+        files.add_command(label="保存草稿", accelerator="Ctrl+S", command=self.save_project)
+        files.add_command(label="草稿另存为…", accelerator="Ctrl+Shift+S", command=lambda: self.save_project(save_as=True))
+        files.add_command(label="恢复自动草稿…", command=self.recover_draft)
         files.add_command(label="继续编辑草稿…", command=self.open_project)
         files.add_separator()
         files.add_command(label="退出", command=self._on_close)
@@ -2640,7 +1992,7 @@ class CurrentDesktopApp(LegacyWorkbench):
         view.add_command(label="适合宽度", command=lambda: self.document_editor.fit_width())
         menu.add_cascade(label="视图", menu=view)
         self.configure(menu=menu)
-        help_menu = tk.Menu(menu, tearoff=False)
+        help_menu = self._help_menu = tk.Menu(menu, tearoff=False)
         help_menu.add_command(label="检查更新", command=self.check_for_updates)
         help_menu.add_separator()
         help_menu.add_command(label="关于与使用许可", command=self.show_about)
@@ -2667,6 +2019,10 @@ class CurrentDesktopApp(LegacyWorkbench):
     def check_for_updates(self, *, automatic: bool = False) -> None:
         """Check GitHub for a newer release without blocking the UI."""
 
+        if getattr(self, "_pending_update", None) is not None:
+            if not automatic:
+                self._offer_install()
+            return
         if self._update_in_progress:
             return
         self._update_in_progress = True
@@ -2694,7 +2050,8 @@ class CurrentDesktopApp(LegacyWorkbench):
         if kind == "update_error":
             self._update_in_progress = False
             if self._update_automatic:
-                self.status_var.set(f"自动检查更新失败，可在帮助菜单重试：{payload}")
+                self._last_update_error = str(payload)
+                self._help_menu.entryconfigure(0, label="重新检查更新（上次连接失败）")
                 return
             self.busy_bar.stop()
             self.status_var.set("检查更新失败。")
@@ -2720,7 +2077,7 @@ class CurrentDesktopApp(LegacyWorkbench):
                 f"发现版本 {info.version}\n\n{info.name}\n\n"
                 f"更新包：{info.asset_name}\n"
                 f"大小：{info.asset_size / 1024 / 1024:.1f} MB\n\n"
-                "是否下载并安装？",
+                "是否下载更新包？",
                 parent=self,
             )
             if install:
@@ -2728,19 +2085,17 @@ class CurrentDesktopApp(LegacyWorkbench):
             return
         if kind == "downloaded":
             self._update_in_progress = False
-            self.busy_bar.stop()
-            self.status_var.set("更新包已下载，准备安装。")
-            try:
-                schedule_portable_update(Path(payload))
-            except Exception as exc:  # noqa: BLE001
-                messagebox.showerror(APP_TITLE, str(exc), parent=self)
-                return
-            messagebox.showinfo(
-                "准备更新",
-                "软件将关闭并在后台完成更新，更新后会自动重新打开。",
-                parent=self,
-            )
-            self.after(200, self.destroy)
+            if not self.busy:
+                self.busy_bar.stop()
+            self._pending_update = Path(payload)
+            self._offer_install()
+
+    def _offer_install(self) -> None:
+        if self._import_in_progress or self._export_in_progress:
+            self.status_var.set("更新包已就绪。任务完成后可从“帮助 → 检查更新”安装。")
+            return
+        if messagebox.askyesno("更新包已校验", "现在安装并重新打开工作台吗？稍后也可在帮助菜单安装。", parent=self):
+            self._on_close(update_path=self._pending_update)
 
     def _download_update(self, info: object) -> None:
         """Download the selected portable release in a worker thread."""
@@ -2770,15 +2125,24 @@ class CurrentDesktopApp(LegacyWorkbench):
         if not self.drop_enabled:
             self.drop_hint.configure(text="拖放注册失败，请使用“导入试题”按钮")
 
-    def _on_close(self) -> None:
+    def _on_close(self, *, update_path: Path | None = None) -> None:
         if self._closing:
             return
         if getattr(self, "_export_in_progress", False):
             self.status_var.set("正在完成 Word 导出，请完成后关闭窗口。")
             return
+        if self._import_in_progress:
+            self.cancel_import()
         if not self._confirm_replace():
             return
+        if update_path is not None:
+            try:
+                schedule_portable_update(update_path)
+            except (OSError, ValueError, RuntimeError) as exc:
+                messagebox.showerror(APP_TITLE, str(exc), parent=self)
+                return
         self._closing = True
+        self._clear_recovery()
         self._cancel_editor_timers()
         uninstall_file_drop(self)
         self.status_var.set("正在结束后台任务…")
@@ -2786,6 +2150,7 @@ class CurrentDesktopApp(LegacyWorkbench):
 
         def cleanup() -> None:
             try:
+                self._recovery.close()
                 self._preview_service.close()
                 self._export_executor.shutdown(wait=True, cancel_futures=True)
                 self.temp_context.cleanup()
@@ -2813,6 +2178,10 @@ class CurrentDesktopApp(LegacyWorkbench):
             setattr(self, name, None)
 
     def _flush_edits(self, *, show_error: bool) -> bool:
+        if self._invalid_option:
+            if show_error:
+                messagebox.showerror(APP_TITLE, self.format_error_var.get(), parent=self)
+            return False
         if self.selected_content_object is not None and self.selected_content_object.block_index is not None:
             try:
                 self._format_spec_from_controls()
@@ -2834,16 +2203,19 @@ class CurrentDesktopApp(LegacyWorkbench):
             return False
         if draft_signature(self.raw_exam) == self._saved_signature:
             return True
-        answer = messagebox.askyesnocancel("保存修改", "当前有尚未保存或导出的修改。\n\n是否先保存可继续编辑的草稿？\n选择“否”会放弃这些修改。", parent=self)
+        answer = messagebox.askyesnocancel("保存修改", "当前草稿有尚未保存的修改。\n\n是否先保存可继续编辑的草稿？\n选择“否”会放弃这些修改。", parent=self)
         if answer is None:
             return False
         return self.save_project() if answer else True
 
     def _refresh_history_buttons(self) -> None:
+        if self._import_in_progress:
+            return
         self.undo_button.configure(state=tk.NORMAL if self.undo_stack else tk.DISABLED)
         self.redo_button.configure(state=tk.NORMAL if self.redo_stack else tk.DISABLED)
         dirty = self._saved_signature and draft_signature(self.raw_exam) != self._saved_signature
-        name = self.current_exam_path.name if self.current_exam_path else "内置示例"
+        path = self._project_path or self.current_exam_path
+        name = path.name if path else "内置示例"
         self.file_label_var.set(f"{name}  ·  {'有未保存修改' if dirty else '已就绪'}")
 
     def open_export_result(self, folder: bool) -> None:
@@ -2853,29 +2225,6 @@ class CurrentDesktopApp(LegacyWorkbench):
             os.startfile(self._last_export_path.parent if folder else self._last_export_path)
         except OSError as exc:
             messagebox.showerror(APP_TITLE, f"无法打开导出结果：{exc}", parent=self)
-
-    def open_project(self) -> None:
-        if getattr(self, "_export_in_progress", False) or getattr(self, "_import_in_progress", False):
-            return
-        if not self._confirm_replace():
-            return
-        path = filedialog.askopenfilename(parent=self, title="继续编辑草稿", filetypes=[("排版草稿", "*.json")])
-        if not path:
-            return
-        try:
-            raw = json.loads(Path(path).read_text(encoding="utf-8"))
-            if not isinstance(raw, dict) or not isinstance(raw.get("metadata"), dict) or not isinstance(raw.get("blocks"), list):
-                raise ValueError("草稿缺少试卷信息或结构数据")
-            from app.models import ExamDocument
-            ExamDocument.from_dict(raw)
-        except (OSError, ValueError, TypeError, KeyError) as exc:
-            messagebox.showerror(APP_TITLE, f"无法读取草稿：{exc}", parent=self)
-            return
-        self._cancel_preview()
-        source = raw.get("metadata", {}).get("source_docx_path")
-        self._apply_imported_exam(Path(source) if source else Path(path), raw)
-        self._project_path = Path(path)
-        self.status_var.set(f"已恢复草稿：{Path(path).name}")
 
 
 def main() -> int:

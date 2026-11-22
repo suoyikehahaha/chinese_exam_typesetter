@@ -1,31 +1,28 @@
-"""Safe page-targeting helpers for the current DOCX renderer."""
-
-from __future__ import annotations
-
+"""Compatibility for older callers and drafts that previously used page-count targets."""
 from copy import deepcopy
 from typing import Any
 
 
-DEFAULT_TARGET_PAGES = 8
-MIN_TARGET_PAGES = 1
-MAX_TARGET_PAGES = 32
-MIN_SPACING_SCALE = 0.72
-MAX_SPACING_SCALE = 1.18
-MIN_FEEDBACK_STEP = 0.94
-MAX_FEEDBACK_STEP = 1.06
+DEFAULT_TARGET_PAGES = 0
+MIN_SPACING_SCALE = MAX_SPACING_SCALE = 1.0
 
 
-def get_target_pages(raw_exam: dict[str, Any]) -> int:
-    """Read and clamp the requested output page count."""
+def use_natural_pagination(metadata):
+    # Zero also tells older releases to respect the document's natural length.
+    metadata["target_pages"] = 0
+    metadata.pop("page_spacing_scale", None)
 
-    metadata = raw_exam.get("metadata", {})
-    value = metadata.get("target_pages", 0 if metadata.get("document_scope") == "practice" else DEFAULT_TARGET_PAGES)
-    try:
-        if int(value) == 0:
-            return 0
-        return max(MIN_TARGET_PAGES, min(MAX_TARGET_PAGES, int(value)))
-    except (TypeError, ValueError):
-        return DEFAULT_TARGET_PAGES
+
+def get_target_pages(raw_exam):
+    return 0
+
+
+def spacing_scale_for_target(raw_exam, measured_pages=None, current_scale=None):
+    return 1.0
+
+
+def adjusted_layout(layout, raw_exam):
+    return deepcopy(layout)
 
 
 def estimate_content_pages(raw_exam: dict[str, Any]) -> int:
@@ -62,60 +59,3 @@ def estimate_content_pages(raw_exam: dict[str, Any]) -> int:
     chars += sum(len(item) for item in notices)
     paragraphs += 3 + len(notices)
     return max(1, (chars + 1499) // 1500, (paragraphs + 47) // 48)
-
-
-def spacing_scale_for_target(
-    raw_exam: dict[str, Any],
-    measured_pages: int | None = None,
-    current_scale: float | None = None,
-) -> float:
-    """Return an explicit scale or one small feedback step from measured pages."""
-
-    metadata = raw_exam.get("metadata", {})
-    if get_target_pages(raw_exam) == 0:
-        return 1.0
-    if current_scale is None:
-        try:
-            current_scale = float(metadata.get("page_spacing_scale", 1.0))
-        except (TypeError, ValueError):
-            current_scale = 1.0
-    current = max(MIN_SPACING_SCALE, min(MAX_SPACING_SCALE, current_scale))
-    if measured_pages is None:
-        return current
-    measured = max(1, int(measured_pages))
-    target = get_target_pages(raw_exam)
-    step = max(
-        MIN_FEEDBACK_STEP,
-        min(MAX_FEEDBACK_STEP, target / measured),
-    )
-    return max(MIN_SPACING_SCALE, min(MAX_SPACING_SCALE, current * step))
-
-
-def adjusted_layout(layout: dict[str, Any], raw_exam: dict[str, Any]) -> dict[str, Any]:
-    """Return a copy whose paragraph rhythm is adjusted within safe bounds."""
-
-    result = deepcopy(layout)
-    scale = spacing_scale_for_target(raw_exam)
-    defaults = result.setdefault("defaults", {})
-    base = float(defaults.get("body_line_spacing", 1.25))
-    defaults["body_line_spacing"] = max(0.95, min(1.8, base * scale))
-    for spec in result.get("styles", {}).values():
-        if "line_spacing" in spec:
-            value = float(spec["line_spacing"])
-            spec["line_spacing"] = max(0.95, min(1.8, value * scale))
-        if "space_before_pt" in spec:
-            spec["space_before_pt"] = max(0.0, float(spec["space_before_pt"]) * scale)
-        if "space_after_pt" in spec:
-            spec["space_after_pt"] = max(0.0, float(spec["space_after_pt"]) * scale)
-    return result
-
-
-__all__ = [
-    "DEFAULT_TARGET_PAGES",
-    "MAX_SPACING_SCALE",
-    "MIN_SPACING_SCALE",
-    "adjusted_layout",
-    "estimate_content_pages",
-    "get_target_pages",
-    "spacing_scale_for_target",
-]

@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
 from typing import Any, Iterator
 
-from docx import Document
+from .word_document import WordTarget, edit_document, save_document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Pt
@@ -23,14 +22,13 @@ SOURCE_RE = re.compile(
 
 
 def apply_notice_material_formatting(
-    docx_path: str | Path,
+    docx_path: WordTarget,
     raw_exam: dict[str, Any],
 ) -> None:
     """Apply the v6 rules plus flexible notice and material-role formatting."""
 
-    target = Path(docx_path)
-    apply_regional_header_formatting(target, raw_exam)
-    document = Document(target)
+    apply_regional_header_formatting(docx_path, raw_exam)
+    document = edit_document(docx_path)
     metadata = raw_exam.get("metadata", {})
     _replace_notice_title(document, str(metadata.get("notice_title", "")))
     _remove_empty_exam_meta(document)
@@ -38,7 +36,7 @@ def apply_notice_material_formatting(
     for paragraph in _all_paragraphs(document):
         if SOURCE_RE.fullmatch(paragraph.text.strip()):
             _paragraph_style(paragraph, "FangSong", 10.5, "right")
-    document.save(target)
+    save_document(document, docx_path)
 
 
 def _replace_notice_title(document: Any, notice_title: str) -> None:

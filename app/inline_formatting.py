@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from pathlib import Path
 from typing import Any
 
-from docx import Document
+from .word_document import WordTarget, edit_document, save_document
 from docx.oxml.ns import qn
 from docx.shared import Pt
 
@@ -21,11 +20,10 @@ FONT_NAMES = {
 }
 
 
-def apply_inline_formats(docx_path: str | Path, raw_exam: dict[str, Any]) -> None:
+def apply_inline_formats(docx_path: WordTarget, raw_exam: dict[str, Any]) -> None:
     """Apply saved selected ranges after all paragraph formatting."""
 
-    target = Path(docx_path)
-    document = Document(target)
+    document = edit_document(docx_path)
     for block in raw_exam.get("blocks", []):
         if str(block.get("type", "")).startswith("answer_"):
             continue
@@ -46,7 +44,7 @@ def apply_inline_formats(docx_path: str | Path, raw_exam: dict[str, Any]) -> Non
                 float(entry.get("size_pt", 10.5)),
                 bool(entry.get("bold", False)),
             )
-    document.save(target)
+    save_document(document, docx_path)
 
 
 def _format_range(
@@ -81,14 +79,14 @@ def _format_range(
                 )
             )
         cursor = run_end
-        if run._r.xpath('./w:drawing | ./w:pict | ./w:object'):
+        if run._r.xpath("./w:drawing | ./w:pict | ./w:object | ./*[local-name()='AlternateContent']"):
             fragments.append((None, run, False))
     for run in old_runs:
         paragraph._p.remove(run._r)
     for text, source_run, selected in fragments:
         run = paragraph.add_run(text or "")
         if text is None:
-            for element in source_run._r.xpath('./w:drawing | ./w:pict | ./w:object'):
+            for element in source_run._r.xpath("./w:drawing | ./w:pict | ./w:object | ./*[local-name()='AlternateContent']"):
                 run._r.append(deepcopy(element))
         if source_run._r.rPr is not None:
             run._r.insert(0, deepcopy(source_run._r.rPr))

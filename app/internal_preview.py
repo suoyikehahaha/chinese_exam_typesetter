@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from copy import deepcopy
 from typing import Any
 
 from . import internal_preview_native as native_preview
+from .resource_anchors import project_source_resources
 from .reference_profile import prepare_profile_exam
-from .page_layout import adjust_inline_spacing
-from .page_target import spacing_scale_for_target
 
 
 def render_internal_preview(
@@ -19,8 +17,8 @@ def render_internal_preview(
 ) -> Any:
     """Render complete previews with CJK-safe fonts and punctuation rules."""
 
-    prepared = deepcopy(prepare_profile_exam(raw_exam))
-    adjust_inline_spacing(prepared, spacing_scale_for_target(prepared))
+    prepared = prepare_profile_exam(raw_exam)
+    project_source_resources(prepared)
     return native_preview.render_internal_preview(prepared, layout_path, output_dir)
 
 

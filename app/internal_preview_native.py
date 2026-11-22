@@ -4,22 +4,14 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
-import re
-from threading import Lock
 from typing import Any
 
-from docx import Document
-from .source_document import source_document
-from PIL import Image, ImageDraw
+from .source_document import source_document, source_read_session
 
 from . import internal_preview_core as preview_core
-from .answer_typesetting import answer_paragraph_font, SCORE_PREFIX_RE, LABELED_ANSWER_RE
+from .answer_typesetting import answer_run_ranges, answer_paragraph_font, SCORE_PREFIX_RE, LABELED_ANSWER_RE
 from .preview_formatting import preview_format
-
-
-_ORIGINAL_VISUAL_LOADER = preview_core._load_source_visuals
-_NATIVE_OBJECT_RE = re.compile(r"^\[\[(?:NATIVE_(?:DRAWING|TABLE)|ANSWER_TABLE):\d+\]\]$")
-_PATCH_LOCK = Lock()
+from .table_preview import render_table_image as _render_table_image
 
 
 def _table_rows(table: Any) -> list[list[str]]:
@@ -40,69 +32,10 @@ def _table_rows(table: Any) -> list[list[str]]:
     return rows
 
 
-def _render_table_image(table: Any, *, max_width: int = 620) -> Image.Image:
-    """Render table borders and every cell string into a preview image."""
-
-    rows = _table_rows(table)
-    columns = max((len(row) for row in rows), default=1)
-    width = max(320, int(max_width))
-    column_width = max(56, width // max(1, columns))
-    width = column_width * columns
-    padding = 6
-    font = preview_core._font("SimSun", 10.5)
-    line_height = max(17, int(getattr(font, "size", 14) * 1.3))
-    scratch = ImageDraw.Draw(Image.new("RGB", (1, 1), "white"))
-    wrapped_rows: list[list[list[str]]] = []
-    row_heights: list[int] = []
-    for row in rows or [[""]]:
-        wrapped: list[list[str]] = []
-        maximum = 1
-        for index in range(columns):
-            value = row[index] if index < len(row) else ""
-            lines: list[str] = []
-            for paragraph in value.splitlines() or [""]:
-                lines.extend(
-                    preview_core._wrap_text(
-                        scratch,
-                        paragraph,
-                        font,
-                        max(20, column_width - 2 * padding),
-                    )
-                )
-            lines = lines or [""]
-            maximum = max(maximum, len(lines))
-            wrapped.append(lines)
-        wrapped_rows.append(wrapped)
-        row_heights.append(maximum * line_height + 2 * padding)
-    height = max(24, sum(row_heights) + 1)
-    image = Image.new("RGBA", (width + 1, height), "white")
-    draw = ImageDraw.Draw(image)
-    y = 0
-    for row_index, wrapped in enumerate(wrapped_rows):
-        row_height = row_heights[row_index]
-        x = 0
-        for column_index, lines in enumerate(wrapped):
-            draw.rectangle(
-                (x, y, x + column_width, y + row_height),
-                outline="#4F4F4F",
-                width=1,
-            )
-            text_y = y + padding
-            for line in lines:
-                draw.text((x + padding, text_y), line, fill="#111111", font=font)
-                text_y += line_height
-            x += column_width
-        y += row_height
-    return image
-
-
 def _load_source_visuals(raw_exam: dict[str, Any]) -> Any:
-    visuals = _ORIGINAL_VISUAL_LOADER(raw_exam)
+    visuals = preview_core._load_source_visuals(raw_exam)
     metadata = raw_exam.get("metadata", {})
-    try:
-        document = source_document(metadata)
-    except (OSError, ValueError, RuntimeError):
-        return visuals
+    document = source_document(metadata)
     for item in metadata.get("native_objects", []):
         if not isinstance(item, dict) or item.get("kind") != "table":
             continue
@@ -114,7 +47,7 @@ def _load_source_visuals(raw_exam: dict[str, Any]) -> Any:
         if document is None or not marker or not (0 <= table_index < len(document.tables)):
             continue
         visuals.images.setdefault(marker, []).append(
-            [_render_table_image(document.tables[table_index])]
+            [_render_table_image(document.tables[table_index], warnings=visuals.warnings)]
         )
     tables = [block for block in raw_exam.get("blocks", []) if block.get("_answer_table_index") is not None]
     if tables:
@@ -122,7 +55,7 @@ def _load_source_visuals(raw_exam: dict[str, Any]) -> Any:
         for block in tables:
             index = block["_answer_table_index"]
             if source is not None and 0 <= index < len(source.tables):
-                visuals.images.setdefault(f"[[ANSWER_TABLE:{index}]]", []).append([_render_table_image(source.tables[index])])
+                visuals.images.setdefault(f"[[ANSWER_TABLE:{index}]]", []).append([_render_table_image(source.tables[index], warnings=visuals.warnings)])
     return visuals
 
 
@@ -174,11 +107,7 @@ def _answer_block_for_preview(block: dict[str, Any]) -> dict[str, Any]:
     for index, entry in enumerate(paragraphs, start=int(bool(header))):
         entry = entry if isinstance(entry, dict) else {"text": str(entry)}
         text = str(entry.get("text", ""))
-        ranges, offset = [], 0
-        for run in entry.get("runs", []):
-            end = offset + len(str(run.get("text", "")))
-            ranges.append({"start": offset, "end": end, "underline": run.get("underline"), "emphasis": run.get("emphasis")})
-            offset = end
+        ranges = answer_run_ranges(entry.get("runs", ()), text)
         if entry.get("role") == "mixed_answer":
             match = SCORE_PREFIX_RE.match(text) or LABELED_ANSWER_RE.match(text)
             if match:
@@ -215,6 +144,7 @@ def preview_exam(raw_exam: dict[str, Any]) -> dict[str, Any]:
     return prepared
 
 
+@source_read_session()
 def render_internal_preview(
     raw_exam: dict[str, Any],
     layout_path: str | Path,
@@ -223,16 +153,7 @@ def render_internal_preview(
     """Render tables, drawings, questions, materials and appended answers."""
 
     prepared = preview_exam(raw_exam)
-    with _PATCH_LOCK:
-        previous_loader = preview_core._load_source_visuals
-        previous_marker = preview_core._NATIVE_DRAWING_RE
-        preview_core._load_source_visuals = _load_source_visuals
-        preview_core._NATIVE_DRAWING_RE = _NATIVE_OBJECT_RE
-        try:
-            return preview_core.render_internal_preview(prepared, layout_path, output_dir)
-        finally:
-            preview_core._load_source_visuals = previous_loader
-            preview_core._NATIVE_DRAWING_RE = previous_marker
+    return preview_core.render_internal_preview(prepared, layout_path, output_dir, visual_loader=_load_source_visuals)
 
 
 __all__ = [

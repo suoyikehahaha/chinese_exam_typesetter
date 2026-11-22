@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
 from typing import Any, Iterator
 
-from docx import Document
+from .word_document import WordTarget, edit_document, save_document
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -18,17 +17,16 @@ SUBSECTION_META_RE = re.compile(r"[（(]\s*本题共")
 
 
 def apply_regional_header_formatting(
-    docx_path: str | Path,
+    docx_path: WordTarget,
     raw_exam: dict[str, Any],
 ) -> None:
     """Apply deterministic header, subsection and semantic role formatting."""
 
-    target = Path(docx_path)
-    document = Document(target)
+    document = edit_document(docx_path)
     metadata = raw_exam.get("metadata", {})
     _format_header(document, metadata)
     _format_semantic_paragraphs(document)
-    document.save(target)
+    save_document(document, docx_path)
 
 
 def _format_header(document: Any, metadata: dict[str, Any]) -> None:

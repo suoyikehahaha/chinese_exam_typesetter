@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-from docx import Document
+from .word_document import WordTarget, edit_document, save_document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Pt
@@ -14,13 +13,12 @@ from .material_role_formatting import apply_material_role_formatting
 
 
 def apply_composition_formatting(
-    docx_path: str | Path,
+    docx_path: WordTarget,
     raw_exam: dict[str, Any],
 ) -> None:
     """Keep q23 prompts and requirements in SimSun with a two-char indent."""
 
-    target = Path(docx_path)
-    apply_material_role_formatting(target, raw_exam)
+    apply_material_role_formatting(docx_path, raw_exam)
     expected: set[str] = set()
     for block in raw_exam.get("blocks", []):
         question = block.get("question")
@@ -33,7 +31,7 @@ def apply_composition_formatting(
         )
     if not expected:
         return
-    document = Document(target)
+    document = edit_document(docx_path)
     for paragraph in document.paragraphs:
         if paragraph.text.strip() not in expected:
             continue
@@ -46,7 +44,7 @@ def apply_composition_formatting(
             fonts = run._element.get_or_add_rPr().get_or_add_rFonts()
             for key in ("ascii", "hAnsi", "eastAsia", "cs"):
                 fonts.set(qn(f"w:{key}"), "SimSun")
-    document.save(target)
+    save_document(document, docx_path)
 
 
 __all__ = ["apply_composition_formatting"]

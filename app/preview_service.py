@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from copy import deepcopy
 from pathlib import Path
 import shutil
 import tempfile
 import json
+import struct
 import hashlib
 from concurrent.futures import Future, ThreadPoolExecutor
 from threading import Event, Lock
 from typing import Any, Callable
 
+from .source_document import source_read_session
 from .internal_preview import render_internal_preview
-from .page_target import get_target_pages, spacing_scale_for_target
 from .preview_cancellation import cancel_event as worker_cancel_event
 
 
@@ -28,16 +29,42 @@ class PreviewResult:
     actual_pages: int
     spacing_scale: float
     warnings: tuple[str, ...] = ()
+    page_info: tuple[tuple[int, int, str], ...] = ()
+
+
+def _page_info(pages):
+    sizes = []
+    for path in pages:
+        payload = Path(path).read_bytes()
+        if len(payload) < 24 or payload[:8] != b"\x89PNG\r\n\x1a\n":
+            return ()
+        sizes.append((*struct.unpack(">II", payload[16:24]), hashlib.sha256(payload).hexdigest()))
+    return tuple(sizes)
+
+
+@source_read_session()
+def render_quick_preview(prepared, layout_path, task_dir, generation, cancel_event):
+    token = worker_cancel_event.set(cancel_event)
+    try:
+        rendered = render_internal_preview(prepared, layout_path, task_dir / "pages")
+    finally:
+        worker_cancel_event.reset(token)
+    if cancel_event.is_set():
+        raise RuntimeError("预览任务已取消")
+    return PreviewResult(generation, rendered.pages, "internal", rendered.locators, 0, rendered.actual_pages,
+                         1.0, getattr(rendered, "warnings", ()), _page_info(rendered.pages))
 
 
 class PreviewService:
     def __init__(self, _builder: Callable[..., Any] | None = None) -> None:
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="exam-preview")
+        self._proof_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="exam-print")
         self._root = Path(tempfile.mkdtemp(prefix="exam-preview-service-"))
         self._lock = Lock()
         self._generation = 0
         self._cancel_event = Event()
         self._future: Future[PreviewResult] | None = None
+        self._buffers: dict[int, Path] = {}
         self._current_dir: Path | None = None
         self._closed = False
         self._cached_key: str | None = None
@@ -49,6 +76,7 @@ class PreviewService:
         layout_path: str | Path,
         _template_path: str | Path | None,
         callback: Callable[[PreviewResult | Exception], None],
+        *, print_proof=False,
     ) -> int:
         with self._lock:
             if self._closed:
@@ -59,81 +87,44 @@ class PreviewService:
             self._cancel_event = Event()
             cancel_event = self._cancel_event
             task_dir = self._root / f"generation-{generation}"
-            task_dir.mkdir(parents=True, exist_ok=True)
             previous_future = self._future
 
         if previous_future is not None:
             previous_future.cancel()
         # Freeze at submission, not when a queued worker eventually starts.
         prepared = deepcopy(raw_exam)
-        signature = deepcopy(prepared)
-        signature.setdefault("metadata", {}).pop("page_spacing_scale", None)
-        source_stamp = []
-        for key in ("source_docx_path", "answer_source_docx_path"):
-            source = Path(str(signature["metadata"].get(key, "")))
-            try:
-                stat = source.stat() if source.is_file() else None
-            except OSError:
-                stat = None
-            source_stamp.append((key, stat.st_size, stat.st_mtime_ns) if stat else (key, None))
-        cache_key = hashlib.sha256((json.dumps(signature, sort_keys=True, ensure_ascii=False) + repr(source_stamp)).encode("utf-8") + Path(layout_path).read_bytes()).hexdigest()
-
+        cache_key = None
         def work() -> PreviewResult:
+            nonlocal cache_key
             if cancel_event.is_set():
                 raise RuntimeError("预览任务已取消")
-            cached = self._cached_result
-            if self._cached_key == cache_key and cached and all(path.is_file() for path in cached.pages):
-                pages = []
-                for index, path in enumerate(cached.pages):
-                    if cancel_event.is_set():
-                        raise RuntimeError("预览任务已取消")
-                    target = task_dir / f"page-{index + 1}.png"
-                    shutil.copy2(path, target)
-                    pages.append(target)
-                return PreviewResult(generation, tuple(pages), cached.engine, dict(cached.locators), cached.target_pages, cached.actual_pages, cached.spacing_scale, cached.warnings)
-            metadata = prepared.setdefault("metadata", {})
-            current_scale = spacing_scale_for_target(prepared)
-            target_pages = get_target_pages(prepared)
-            best: tuple[int, Any, float] | None = None
-            document_kind = str(prepared.get("document_kind", "exam"))
-            iterations = 1 if target_pages == 0 or document_kind in {"answer", "exam_with_answer"} else 4
-            for iteration in range(iterations):
-                metadata["page_spacing_scale"] = current_scale
-                token = worker_cancel_event.set(cancel_event)
+            metadata = prepared.get("metadata", {})
+            signature = {**prepared, "metadata": {k: v for k, v in metadata.items()
+                                                  if k not in {"target_pages", "page_spacing_scale", "source_blobs"}}}
+            source_stamp = []
+            for key in ("source_docx_path", "answer_source_docx_path"):
+                source = Path(metadata.get(key) or "")
                 try:
-                    rendered = render_internal_preview(prepared, layout_path, task_dir / f"pages-{iteration}")
-                finally:
-                    worker_cancel_event.reset(token)
-                if cancel_event.is_set():
-                    raise RuntimeError("预览任务已取消")
-                distance = abs(rendered.actual_pages - target_pages)
-                if best is None or distance < best[0]:
-                    best = (distance, rendered, current_scale)
-                if distance == 0:
-                    break
-                next_scale = spacing_scale_for_target(
-                    prepared,
-                    measured_pages=rendered.actual_pages,
-                    current_scale=current_scale,
-                )
-                if abs(next_scale - current_scale) < 0.0001:
-                    break
-                current_scale = next_scale
-            if best is None:
-                raise RuntimeError("预览未生成任何页面")
-            _distance, rendered, selected_scale = best
-            return PreviewResult(
-                generation,
-                rendered.pages,
-                "internal",
-                rendered.locators,
-                rendered.target_pages,
-                rendered.actual_pages,
-                selected_scale,
-                getattr(rendered, "warnings", ()),
-            )
+                    stat = source.stat() if source.is_file() and not metadata.get("source_refs") else None
+                except OSError:
+                    stat = None
+                source_stamp.append((stat.st_size, stat.st_mtime_ns) if stat else None)
+            content = json.dumps(signature, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            mode = "print" if print_proof else "internal"
+            cache_key = hashlib.sha256(content + repr((mode, source_stamp)).encode() + Path(layout_path).read_bytes()).hexdigest()
+            with self._lock:
+                cached = self._cached_result if self._cached_key == cache_key else None
+            if cached and all(p.is_file() for p in cached.pages):
+                return replace(cached, generation=generation)
+            task_dir.mkdir(parents=True, exist_ok=True)
+            if not print_proof:
+                return render_quick_preview(prepared, layout_path, task_dir, generation, cancel_event)
+            from .print_proof import render_print_proof
+            pages, engine = render_print_proof(prepared, layout_path, _template_path, task_dir, cancel_event)
+            return PreviewResult(generation, pages, engine, {}, 0, len(pages), 1.0, page_info=_page_info(pages))
 
-        future = self._executor.submit(work)
+        executor = self._proof_executor if print_proof else self._executor
+        future = executor.submit(work)
         with self._lock:
             self._future = future
 
@@ -145,14 +136,11 @@ class PreviewService:
             with self._lock:
                 stale = self._closed or generation != self._generation
                 if isinstance(result, PreviewResult) and not stale:
-                    previous = self._current_dir
-                    self._current_dir = task_dir
+                    if self._cached_result is None or result.pages != self._cached_result.pages:
+                        self._current_dir = task_dir
+                    self._buffers[generation] = self._current_dir
                     self._cached_key = cache_key
                     self._cached_result = result
-                else:
-                    previous = None
-            if previous is not None:
-                shutil.rmtree(previous, ignore_errors=True)
             if stale or isinstance(result, Exception):
                 shutil.rmtree(task_dir, ignore_errors=True)
             if not stale:
@@ -160,6 +148,17 @@ class PreviewService:
 
         future.add_done_callback(done)
         return generation
+
+    def acknowledge(self, generation: int) -> None:
+        """Only retire older page files after Tk has installed the replacement."""
+        with self._lock:
+            if generation not in self._buffers:
+                return
+            older = {path for gen, path in self._buffers.items() if gen < generation}
+            self._buffers = {gen: path for gen, path in self._buffers.items() if gen >= generation}
+            retired = older.difference(self._buffers.values())
+        for path in retired:
+            shutil.rmtree(path, ignore_errors=True)
 
     def cancel(self) -> None:
         with self._lock:
@@ -176,6 +175,7 @@ class PreviewService:
             self._closed = True
             self._cancel_event.set()
         self._executor.shutdown(wait=True, cancel_futures=True)
+        self._proof_executor.shutdown(wait=True, cancel_futures=True)
         shutil.rmtree(self._root, ignore_errors=True)
 
 

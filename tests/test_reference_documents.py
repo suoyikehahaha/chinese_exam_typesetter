@@ -71,7 +71,7 @@ class ReferenceDocumentTests(unittest.TestCase):
                 self.assertIn("word/document.xml", archive.namelist())
                 self.assertTrue(any(name.startswith("word/media/") for name in archive.namelist()))
 
-    def test_question_only_references_reach_eight_page_preview(self) -> None:
+    def test_question_only_references_show_all_natural_pages(self) -> None:
         for source, _expected_count, preset in REFERENCES[:3]:
             with self.subTest(source=source.name):
                 self._require(source)
@@ -91,8 +91,11 @@ class ReferenceDocumentTests(unittest.TestCase):
                     self.assertTrue(received)
                     if isinstance(received[0], Exception):
                         raise received[0]
-                    self.assertEqual(received[0].target_pages, 8)
-                    self.assertEqual(received[0].actual_pages, 8)
+                    preview = received[0]
+                    self.assertEqual(preview.target_pages, 0)
+                    self.assertGreater(preview.actual_pages, 0)
+                    self.assertEqual(preview.actual_pages, len(preview.pages))
+                    self.assertTrue(all(page.is_file() for page in preview.pages))
                 finally:
                     service.close()
 

@@ -2,21 +2,19 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
 from typing import Any, Iterator
 
-from docx import Document
+from .word_document import WordTarget, edit_document, save_document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Pt
 
 
-def apply_segmentation_formatting(docx_path: str | Path) -> None:
+def apply_segmentation_formatting(docx_path: WordTarget) -> None:
     """Box every uppercase marker present and preserve the source sequence."""
 
-    target = Path(docx_path)
-    document = Document(target)
+    document = edit_document(docx_path)
     for paragraph in _all_paragraphs(document):
         if paragraph.style.name != "Exam_segmentation_text":
             continue
@@ -36,7 +34,7 @@ def apply_segmentation_formatting(docx_path: str | Path) -> None:
                 border.set(qn("w:space"), "1")
                 border.set(qn("w:color"), "auto")
                 run._element.get_or_add_rPr().append(border)
-    document.save(target)
+    save_document(document, docx_path)
 
 
 def _font(run: Any, name: str, size: float) -> None:

@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Iterable
 
-from docx import Document
+from .word_document import WordTarget, edit_document, save_document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Pt
@@ -35,17 +34,16 @@ def set_run_font_preserving_properties(
         run.bold = bool(bold)
 
 
-def protect_inline_properties(docx_path: str | Path) -> None:
+def protect_inline_properties(docx_path: WordTarget) -> None:
     """Normalize boxed A-H markers without flattening their run properties."""
 
-    target = Path(docx_path)
-    document = Document(target)
+    document = edit_document(docx_path)
     for paragraph in _all_paragraphs(document):
         for run in paragraph.runs:
             text = run.text.strip()
             if len(text) == 1 and text in "ABCDEFGH" and _has_border(run):
                 set_run_font_preserving_properties(run, "SimSun", 10.5)
-    document.save(target)
+    save_document(document, docx_path)
 
 
 def _has_border(run: Any) -> bool:

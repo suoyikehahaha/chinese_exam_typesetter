@@ -15,6 +15,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Mm, Pt
 
+from app.resource_anchors import register_block_paragraphs
 from app.models import Block, ExamDocument, InlineSegment, Question
 
 
@@ -37,6 +38,12 @@ class DocxRenderer:
     def render(self, exam: ExamDocument, output_path: str | Path) -> Path:
         """生成 DOCX 并返回输出路径。"""
 
+        target = Path(output_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        self.compose(exam).save(target)
+        return target
+
+    def compose(self, exam: ExamDocument, raw_blocks=None) -> DocumentObject:
         if self.template_path:
             if not self.template_path.exists():
                 raise FileNotFoundError(f"母版不存在：{self.template_path}")
@@ -45,17 +52,19 @@ class DocxRenderer:
         else:
             self.doc = Document()
 
+        self.document.part.exam_paragraphs = {}
+        self._block_paragraphs = []
         self._configure_page()
         self._create_styles()
         self._render_header(exam)
-        for block in exam.blocks:
+        for index, block in enumerate(exam.blocks):
+            self._block_paragraphs = []
             self._render_block(block)
+            if raw_blocks is not None:
+                register_block_paragraphs(self.document, raw_blocks[index], self._block_paragraphs)
         self._add_page_number()
 
-        target = Path(output_path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        self.doc.save(target)
-        return target
+        return self.document
 
     @property
     def document(self) -> DocumentObject:
@@ -266,6 +275,8 @@ class DocxRenderer:
         bold: bool | None = None,
         boxed: bool = False,
     ) -> Any:
+        if not self._block_paragraphs or self._block_paragraphs[-1]._p is not paragraph._p:
+            self._block_paragraphs.append(paragraph)
         spec = self.layout["styles"][role]
         run = paragraph.add_run(text)
         run.font.name = spec["font"]

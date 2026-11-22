@@ -2,23 +2,21 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-from docx import Document
+from .word_document import WordTarget, edit_document, save_document
 
 from .inline_formatting import FONT_NAMES, _format_range
 from .paragraph_formatting import _apply, _find_exact
 
 
 def apply_answer_overrides(
-    docx_path: str | Path,
+    docx_path: WordTarget,
     raw_exam: dict[str, Any],
 ) -> None:
     """Apply workbench controls after the Guangzhou answer base style."""
 
-    target = Path(docx_path)
-    document = Document(target)
+    document = edit_document(docx_path)
     for block in raw_exam.get("blocks", []):
         if not str(block.get("type", "")).startswith("answer_"):
             continue
@@ -53,7 +51,7 @@ def apply_answer_overrides(
                 float(entry.get("size_pt", 10.5)),
                 bool(entry.get("bold", False)),
             )
-    document.save(target)
+    save_document(document, docx_path)
 
 
 def _answer_lines(block: dict[str, Any]) -> list[str]:

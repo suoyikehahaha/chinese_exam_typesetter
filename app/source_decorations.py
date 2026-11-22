@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from copy import deepcopy
-from pathlib import Path
 from typing import Any, Iterator
 
-from docx import Document
+from .word_document import WordTarget, edit_document, save_document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from .resource_anchors import bound_paragraph
 from .paragraph_identity import paragraph_identity
 
 
 def restore_source_decorations(
-    docx_path: str | Path,
+    docx_path: WordTarget,
     raw_exam: dict[str, Any],
 ) -> None:
     """Restore recorded character marks on matching output paragraphs."""
@@ -21,24 +22,27 @@ def restore_source_decorations(
     entries = raw_exam.get("metadata", {}).get("source_decorations", [])
     if not entries:
         return
-    target = Path(docx_path)
-    document = Document(target)
-    paragraphs = list(_all_paragraphs(document))
-    for entry in entries:
-        matches = []
-        for paragraph in paragraphs:
-            if paragraph_identity(paragraph.text) == paragraph_identity(entry.get("text", "")):
-                matches.append((paragraph, 0))
-                continue
+    document = edit_document(docx_path)
+    lookup = defaultdict(list)
+    for paragraph in _all_paragraphs(document):
+        text = paragraph.text
+        key = paragraph_identity(text)
+        lookup[key].append((paragraph, 0))
+        if "\n" in text:
             offset = 0
-            for line in paragraph.text.splitlines(keepends=True):
-                if paragraph_identity(line) == paragraph_identity(entry.get("text", "")):
-                    matches.append((paragraph, offset))
+            for line in text.splitlines(keepends=True):
+                if paragraph_identity(line) != key:
+                    lookup[paragraph_identity(line)].append((paragraph, offset))
                 offset += len(line)
-        occurrence = int(entry.get("occurrence", 0))
-        if occurrence >= len(matches):
-            continue
-        paragraph, offset = matches[occurrence]
+    for entry in entries:
+        paragraph = bound_paragraph(document, entry.get("object_ref", ()))
+        offset = 0
+        if paragraph is None:
+            matches = lookup.get(paragraph_identity(entry["text"]), ())
+            occurrence = int(entry.get("occurrence", 0))
+            if not 0 <= occurrence < len(matches):
+                continue
+            paragraph, offset = matches[occurrence]
         for mark in entry.get("ranges", []):
             _decorate_range(
                 paragraph,
@@ -48,7 +52,7 @@ def restore_source_decorations(
                 str(mark.get("emphasis", "")),
                 bool(mark.get("bold", False)),
             )
-    document.save(target)
+    save_document(document, docx_path)
 
 
 def _decorate_range(
@@ -83,14 +87,14 @@ def _decorate_range(
                 )
             )
         cursor = run_end
-        if run._r.xpath('./w:drawing | ./w:pict | ./w:object'):
+        if run._r.xpath("./w:drawing | ./w:pict | ./w:object | ./*[local-name()='AlternateContent']"):
             fragments.append((None, run, False))
     for run in old_runs:
         paragraph._p.remove(run._r)
     for text, source, selected in fragments:
         run = paragraph.add_run(text or '')
         if text is None:
-            for element in source._r.xpath('./w:drawing | ./w:pict | ./w:object'):
+            for element in source._r.xpath("./w:drawing | ./w:pict | ./w:object | ./*[local-name()='AlternateContent']"):
                 run._r.append(deepcopy(element))
         if source._r.rPr is not None:
             run._r.insert(0, deepcopy(source._r.rPr))

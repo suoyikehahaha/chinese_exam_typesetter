@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
 from typing import Any
 
-from docx import Document
+from .resource_anchors import bound_paragraph
+from .word_document import WordTarget, edit_document, save_document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Pt
@@ -28,26 +28,25 @@ ALIGNMENTS = {
 
 
 def apply_paragraph_formats(
-    docx_path: str | Path,
+    docx_path: WordTarget,
     raw_exam: dict[str, Any],
 ) -> None:
     """Apply structure-wide formats followed by selected-line formats."""
 
-    target = Path(docx_path)
-    document = Document(target)
+    document = edit_document(docx_path)
     for block in raw_exam.get("blocks", []):
         if str(block.get("type", "")).startswith("answer_"):
             continue
         if block.get("type") == "question":
             question = block.get("question", {})
-            stem_paragraph = _find_question(document, int(question.get("number", 0)))
+            stem_paragraph, _ = _locate(document, block, {"target": "stem"})
             spec = question.get("format")
             if stem_paragraph is not None and spec:
                 _apply(stem_paragraph, spec)
             option_spec = _option_spec(spec or {})
             if option_spec:
-                for option in question.get("options", []):
-                    paragraph = _find_exact(document, str(option))
+                for i, option in enumerate(question.get("options", [])):
+                    paragraph, _ = _locate(document, block, {"target": "option", "target_index": i})
                     if paragraph is not None:
                         _apply(paragraph, option_spec)
             for entry in question.get("paragraph_formats", []):
@@ -57,15 +56,15 @@ def apply_paragraph_formats(
         else:
             spec = block.get("format")
             if spec:
-                for text in _block_lines(block):
-                    paragraph = _find_exact(document, text)
+                for i, text in enumerate(_block_lines(block)):
+                    paragraph, _ = _locate(document, block, {"target": "block", "target_index": i})
                     if paragraph is not None:
                         _apply(paragraph, spec)
             for entry in block.get("paragraph_formats", []):
                 paragraph, _prefix = _locate(document, block, entry)
                 if paragraph is not None:
                     _apply(paragraph, entry)
-    document.save(target)
+    save_document(document, docx_path)
 
 
 def _option_spec(spec: dict[str, Any]) -> dict[str, Any]:
@@ -158,6 +157,13 @@ def _locate(
 ) -> tuple[Any | None, int]:
     target = str(entry.get("target", "stem"))
     index = int(entry.get("target_index", 0))
+    registered = bound_paragraph(document, (block.get("id"), target, index))
+    if registered is not None:
+        if target == "stem":
+            return registered, len(f"{block['question']['number']}．")
+        if target == "subquestion":
+            return registered, len(f"（{index + 1}）")
+        return registered, int(entry.get("text_offset", 0))
     if block.get("type") != "question":
         lines = _block_lines(block)
         return (

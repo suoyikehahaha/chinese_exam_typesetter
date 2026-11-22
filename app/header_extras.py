@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-from docx import Document
+from .word_document import WordTarget, edit_document, save_document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -14,7 +13,7 @@ from docx.text.paragraph import Paragraph
 
 
 def apply_header_extras(
-    docx_path: str | Path,
+    docx_path: WordTarget,
     raw_exam: dict[str, Any],
 ) -> None:
     """Place confidentiality text before the formal exam title."""
@@ -24,8 +23,7 @@ def apply_header_extras(
     ).strip()
     if not text:
         return
-    target = Path(docx_path)
-    document = Document(target)
+    document = edit_document(docx_path)
     if not document.paragraphs:
         return
     element = OxmlElement("w:p")
@@ -39,4 +37,4 @@ def apply_header_extras(
     rfonts = run._element.get_or_add_rPr().get_or_add_rFonts()
     for key in ("ascii", "hAnsi", "eastAsia", "cs"):
         rfonts.set(qn(f"w:{key}"), "SimSun")
-    document.save(target)
+    save_document(document, docx_path)

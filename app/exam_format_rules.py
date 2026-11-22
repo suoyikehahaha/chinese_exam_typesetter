@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
 from typing import Any, Iterator
 
-from docx import Document
+from .word_document import WordTarget, edit_document, save_document
 from docx.oxml.ns import qn
 from docx.shared import Pt
 
@@ -15,11 +14,10 @@ QUESTION_RE = re.compile(r"^\d{1,2}．")
 OPTION_RE = re.compile(r"^[A-D]．")
 
 
-def apply_exam_format_rules(docx_path: str | Path) -> None:
+def apply_exam_format_rules(docx_path: WordTarget) -> None:
     """Apply fixed indent rules with a visible 1.5-character option offset."""
 
-    target = Path(docx_path)
-    document = Document(target)
+    document = edit_document(docx_path)
     size = 10.5
     for paragraph in _all_paragraphs(document):
         text = paragraph.text.strip()
@@ -40,7 +38,7 @@ def apply_exam_format_rules(docx_path: str | Path) -> None:
         if paragraph.style.name == "Exam_notice_body":
             paragraph.paragraph_format.left_indent = Pt(0)
             paragraph.paragraph_format.first_line_indent = Pt(size * 2)
-    document.save(target)
+    save_document(document, docx_path)
 
 
 def _font(run: Any, name: str, size: float) -> None:

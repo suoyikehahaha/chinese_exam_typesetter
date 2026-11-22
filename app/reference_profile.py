@@ -5,9 +5,8 @@ instructions or copied into user exams. Existing presets keep their behavior.
 """
 
 from copy import deepcopy
-from pathlib import Path
 
-from docx import Document
+from .word_document import WordTarget, edit_document, save_document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Pt
@@ -23,9 +22,9 @@ def is_reference_profile(raw: dict) -> bool:
 
 def prepare_profile_exam(raw: dict) -> dict:
     """Adapt automatic semantic annotations; retain explicit user overrides."""
-    if not is_reference_profile(raw):
-        return raw
     result = deepcopy(raw)
+    if not is_reference_profile(raw):
+        return result
     for block in result.get("blocks", []):
         if block.get("type") == "question":
             spec = block.get("question", {}).get("format", {})
@@ -37,11 +36,11 @@ def prepare_profile_exam(raw: dict) -> dict:
     return result
 
 
-def apply_reference_profile(path: str | Path, raw: dict) -> None:
+def apply_reference_profile(path: WordTarget, raw: dict) -> None:
     """Restore reference defaults after legacy passes, before user overrides."""
     if not is_reference_profile(raw) or raw.get("document_kind") == "answer":
         return
-    document = Document(path)
+    document = edit_document(path)
     subsection_names = {
         str(block.get("name", "")) + str(block.get("meta", "")): len(str(block.get("name", "")))
         for block in raw.get("blocks", []) if block.get("type") == "subsection"
@@ -76,7 +75,7 @@ def apply_reference_profile(path: str | Path, raw: dict) -> None:
                 for run in paragraph.runs:
                     run.bold = position < boundary
                     position += len(run.text)
-    document.save(path)
+    save_document(document, path)
 
 
 def _font(paragraph, name: str, size: float) -> None:

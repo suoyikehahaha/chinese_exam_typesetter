@@ -335,6 +335,13 @@ def test_new_global_edit_discards_queued_old_preview(app):
     assert '等待更新' in app.page_settings_status_var.get()
 
 
+def test_new_preview_immediately_reports_the_installed_page_count(app, tmp_path):
+    preview = app.document_editor
+    pages = preview_pages(tmp_path, "new-pages")
+    preview.set_preview_pages(pages)
+    assert f"/ {len(pages)} 页" in preview.status_variable.get()
+
+
 def test_page_counter_updates_while_editing_global_fields(app):
     preview = app.document_editor
     with patch.object(preview, 'focus_get', return_value=app.apply_page_settings_button):

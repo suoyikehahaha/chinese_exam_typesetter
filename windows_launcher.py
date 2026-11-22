@@ -249,7 +249,7 @@ def _run_startup_test(module: object, output: Path) -> int:
     def finish() -> None:
         if app._closing:
             return
-        if app._displayed_revision is None or not app.preview_pages:
+        if app._displayed_revision is None or not app.document_editor.preview_image_refs:
             if monotonic() - started >= 25:
                 failed("内置示例预览未能就绪")
             else:

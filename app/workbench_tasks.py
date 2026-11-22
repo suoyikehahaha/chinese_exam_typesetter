@@ -264,8 +264,7 @@ class WorkbenchTasks:
             self._settings_feedback = None
             self._preview_settings_feedback = None
         if feedback is None:
-            page = self.document_editor.current_page() + 1
-            self.document_editor.update_message_var.set(f"第 {page} 页 · 已显示当前修改")
+            self.document_editor.update_message_var.set("已按当前设置生成预览")
         document_kind = str(self.raw_exam.get("document_kind", "exam"))
         if document_kind == "exam_with_answer":
             self.status_var.set(

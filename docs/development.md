@@ -13,6 +13,7 @@
 | 结构模型与校验 | `app/models/`、`app/validators/` |
 | 正式 DOCX 生成 | `app/current_pipeline.py`、`app/renderers/docx_renderer.py` |
 | 预览调度、缓存及取消 | `app/preview_service.py` |
+| 按需打印校对 | `app/print_proof.py`，在独立工作目录中使用 Word 或 LibreOffice 校对最终 DOCX |
 | 内部页面预览 | `app/internal_preview.py`、`app/internal_preview_core.py`、`app/internal_preview_native.py` |
 | 版式与字体配置 | `templates/layout.yaml` |
 
@@ -30,7 +31,7 @@ DOCX处理不依赖办公软件。旧版DOC转换按需使用Word/WPS；预览�
 
 测试集同时包含unittest类与pytest函数，统一使用pytest发现全部用例。GUI回归使用真实Tk控件及隔离的对话框，不会替用户操作现有文档窗口。`workbench_ui.py`负责界面布局，`workbench_state.py`负责草稿与文件名规则，`reference_profile.py`负责用户模板兼容规则。
 
-内部诊断模式可验证打包后的实际代码，不会自动打开编辑窗口：
+内部诊断模式可验证打包后的实际代码。已安装 Word 或 LibreOffice 时，也可以用 `--print-proof-test` 对同一份文档检查打印引擎和实际页数。
 
 ```powershell
 $exe = (Resolve-Path '.\output\release\ChineseExamTypesetter_0.3.0.exe').Path

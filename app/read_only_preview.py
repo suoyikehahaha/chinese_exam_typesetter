@@ -232,6 +232,8 @@ class ReadOnlyPreview(PageViewport):
         self._rendering = False
         self._last_surface_width = 0
         self._last_scrollregion = None
+        index = min(previous_view[0], len(paths) - 1) if previous_view and paths else 0
+        self._update_status(index)
         self._queue_layout_sync()
         if previous_view is not None:
             self._restore_page_position(previous_view)

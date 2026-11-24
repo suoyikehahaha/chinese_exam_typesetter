@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import unittest
 import queue
@@ -109,6 +110,24 @@ class GitHubUpdaterTests(unittest.TestCase):
         self.assertTrue(info.newer)
         self.assertEqual(info.version, "0.2.0")
         self.assertEqual(info.asset_name, "ChineseExamTypesetter_0.2.0.exe")
+
+    @unittest.skipUnless(os.name == "nt", "Windows native HTTPS client")
+    def test_native_transport_rechecks_https_and_returns_exact_bytes(self):
+        from app.github_updater import _open_release_request
+        from urllib.request import Request
+
+        def transfer(args, *, stdout, **kwargs):
+            self.assertEqual(args[args.index("--proto-redir") + 1], "=https")
+            self.assertEqual(args[args.index("--proto") + 1], "=https")
+            self.assertNotIn("--insecure", args)
+            self.assertEqual(args[-1], GITHUB_API)
+            stdout.write(b"release bytes")
+            return SimpleNamespace(returncode=0)
+
+        with patch("app.github_updater.urlopen", side_effect=FileNotFoundError()), \
+             patch("app.github_updater.subprocess.run", side_effect=transfer):
+            with _open_release_request(Request(GITHUB_API), 10) as stream:
+                self.assertEqual(stream.read(), b"release bytes")
 
     def test_portable_update_script_replaces_and_restarts_exe(self) -> None:
         script = _portable_update_script(

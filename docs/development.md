@@ -34,7 +34,7 @@ DOCX处理不依赖办公软件。旧版DOC转换按需使用Word/WPS；预览�
 内部诊断模式可验证打包后的实际代码。已安装 Word 或 LibreOffice 时，也可以用 `--print-proof-test` 对同一份文档检查打印引擎和实际页数。
 
 ```powershell
-$exe = (Resolve-Path '.\output\release\ChineseExamTypesetter_0.3.0.exe').Path
+$exe = (Resolve-Path '.\output\release\ChineseExamTypesetter_0.3.1.exe').Path
 $inputDoc = (Resolve-Path 'D:\测试目录\脱敏样例.docx').Path
 $diagnosticDir = (New-Item -ItemType Directory -Force '.\work').FullName
 foreach ($mode in @('import', 'preview', 'export')) {

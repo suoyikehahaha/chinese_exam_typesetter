@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import queue
 import threading
 import tkinter as tk
 from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
-from urllib.request import Request, urlopen
 import webbrowser
 
-from app.github_updater import GITHUB_API, GITHUB_REPOSITORY
-from app.version import APP_VERSION
+from app.github_updater import GITHUB_API, GITHUB_REPOSITORY, fetch_release_metadata
 
-USER_AGENT = f"ChineseExamTypesetter/{APP_VERSION}"
 
 
 class GitHubUpdatePage(tk.Toplevel):
@@ -77,16 +73,7 @@ class GitHubUpdatePage(tk.Toplevel):
 
     def _fetch(self) -> None:
         try:
-            request = Request(
-                GITHUB_API,
-                headers={
-                    "Accept": "application/vnd.github+json",
-                    "User-Agent": USER_AGENT,
-                    "X-GitHub-Api-Version": "2022-11-28",
-                },
-            )
-            with urlopen(request, timeout=15) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+            payload = fetch_release_metadata()
             self._messages.put(("ok", payload))
         except Exception as exc:  # noqa: BLE001
             self._messages.put(("error", str(exc)))

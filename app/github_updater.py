@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import base64
 import hashlib
@@ -35,9 +36,34 @@ class UpdateInfo:
     checksum_url: str = ""
 
 
-def check_latest_release(current_version: str) -> UpdateInfo:
-    """Read the latest public release from the official repository."""
+@contextmanager
+def _open_release_request(request: Request, timeout: int):
+    """Use the Windows HTTPS client when the packaged TLS runtime cannot start."""
+    try:
+        response = urlopen(request, timeout=timeout)
+    except FileNotFoundError as exc:
+        system_root = os.environ.get("SystemRoot")
+        curl = Path(system_root, "System32", "curl.exe") if system_root else None
+        if os.name != "nt" or curl is None or not curl.is_file():
+            raise RuntimeError(f"无法建立更新连接，请从发布页下载：{GITHUB_REPOSITORY}/releases/latest") from exc
+        args = [str(curl), "--disable", "--fail", "--silent", "--show-error", "--location",
+                "--proto", "=https", "--proto-redir", "=https", "--max-time", str(timeout)]
+        for key, value in request.header_items():
+            args.extend(["--header", f"{key}: {value}"])
+        with tempfile.TemporaryFile() as body:
+            result = subprocess.run([*args, "--", request.full_url], stdout=body, stderr=subprocess.PIPE,
+                                    timeout=timeout + 5, creationflags=subprocess.CREATE_NO_WINDOW)
+            if result.returncode:
+                detail = result.stderr.decode("utf-8", errors="replace").strip()
+                raise RuntimeError(f"连接 GitHub 失败，请稍后重试。{detail}") from exc
+            body.seek(0)
+            yield body
+    else:
+        with response as stream:
+            yield stream
 
+
+def fetch_release_metadata() -> dict:
     request = Request(
         GITHUB_API,
         headers={
@@ -46,8 +72,13 @@ def check_latest_release(current_version: str) -> UpdateInfo:
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
-    with urlopen(request, timeout=20) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    with _open_release_request(request, timeout=20) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def check_latest_release(current_version: str) -> UpdateInfo:
+    """Read the latest public release from the official repository."""
+    payload = fetch_release_metadata()
     version = str(payload.get("tag_name", "")).removeprefix("v")
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
         raise RuntimeError("发布版本号无法识别，请查看 GitHub 发布页面。")
@@ -73,7 +104,7 @@ def _expected_hash(info):
     if info.checksum_url:
         _validate_download_url(info.checksum_url)
         request = Request(info.checksum_url, headers={"User-Agent": USER_AGENT})
-        with urlopen(request, timeout=25) as response:
+        with _open_release_request(request, timeout=25) as response:
             manifest = response.read(65537)
         if len(manifest) <= 65536:
             for line in manifest.decode("utf-8-sig").splitlines():
@@ -93,7 +124,7 @@ def download_release_asset(info: UpdateInfo) -> Path:
     request = Request(info.asset_url, headers={"User-Agent": USER_AGENT, "Accept": "application/octet-stream"})
     digest = hashlib.sha256()
     try:
-        with urlopen(request, timeout=120) as response, target.open("xb") as output:
+        with _open_release_request(request, timeout=120) as response, target.open("xb") as output:
             while chunk := response.read(1024 * 1024):
                 digest.update(chunk)
                 output.write(chunk)

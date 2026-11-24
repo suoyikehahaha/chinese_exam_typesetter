@@ -42,6 +42,10 @@ jobs:
           $process = Start-Process -FilePath $package[0].FullName -ArgumentList ('--startup-test-output "' + $healthPath + '"') -WindowStyle Hidden -PassThru -Wait
           $health = Get-Content -LiteralPath $healthPath -Encoding UTF8 -Raw | ConvertFrom-Json
           if ($process.ExitCode -ne 0 -or $health.status -ne "GUI_STARTUP_OK" -or $package[0].BaseName -ne "ChineseExamTypesetter_$($health.version)") { throw "Portable startup check failed." }
+          $updatePath = Join-Path $env:RUNNER_TEMP "exam-update.json"
+          $check = Start-Process -FilePath $package[0].FullName -ArgumentList ('--update-test-output "' + $updatePath + '"') -WindowStyle Hidden -PassThru -Wait
+          $update = Get-Content -LiteralPath $updatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($check.ExitCode -ne 0 -or $update.status -ne "UPDATE_CHECK_OK") { throw "Packaged GitHub update check failed." }
           $hash = (Get-FileHash -Algorithm SHA256 $package[0].FullName).Hash.ToLowerInvariant()
           "$hash  $($package[0].Name)" | Set-Content -Encoding ascii output/release/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4

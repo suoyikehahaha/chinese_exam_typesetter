@@ -6,7 +6,10 @@ import unittest
 
 from app.inspector_model import (
     build_object_locators,
+    clear_inline_formats,
     content_objects_for_block,
+    inline_formats_for,
+    merge_inline_format,
     metadata_content_objects,
     objects_in_scope,
     paragraph_format_for,
@@ -117,6 +120,28 @@ class InspectorModelTests(unittest.TestCase):
         self.assertEqual(adjusted["page"]["margin_top_mm"], 24)
         self.assertEqual(adjusted["page"]["margin_bottom_mm"], 16)
         self.assertEqual(adjusted["page"]["margin_left_mm"], 45)
+
+    def test_merge_and_clear_inline_formats_split_overlapping_ranges(self) -> None:
+        raw = sample_exam()
+        block_index = next(index for index, block in enumerate(raw["blocks"]) if block.get("type") == "question")
+        stem = content_objects_for_block(raw["blocks"][block_index], block_index)[0]
+
+        merge_inline_format(raw, stem, 0, 6, {"bold": True, "font": "黑体"})
+        merge_inline_format(raw, stem, 3, 9, {"underline": True, "emphasis": "dot"})
+
+        entries = inline_formats_for(raw, stem)
+        self.assertEqual([(e["start"], e["end"]) for e in entries], [(0, 3), (3, 6), (6, 9)])
+        self.assertTrue(entries[0]["bold"])
+        self.assertNotIn("underline", entries[0])
+        self.assertTrue(entries[1]["bold"] and entries[1]["underline"] and entries[1]["emphasis"] == "dot")
+        self.assertTrue(entries[2]["underline"] and entries[2]["emphasis"] == "dot")
+
+        clear_inline_formats(raw, stem, 3, 6)
+        after_partial = inline_formats_for(raw, stem)
+        self.assertEqual([(e["start"], e["end"]) for e in after_partial], [(0, 3), (6, 9)])
+
+        clear_inline_formats(raw, stem)
+        self.assertEqual(inline_formats_for(raw, stem), [])
 
 
 if __name__ == "__main__":

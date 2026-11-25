@@ -9,7 +9,7 @@ from app.flexible_importers import (
     PUBLICATION_NOTE_RE,
     mark_publication_notes,
 )
-from app.windows_activation import ACTIVE, INACTIVE
+from app.ui.theme import ACTIVE_PALETTE as ACTIVE, INACTIVE_PALETTE as INACTIVE
 
 
 def test_publication_note_pattern_excludes_source_provenance() -> None:

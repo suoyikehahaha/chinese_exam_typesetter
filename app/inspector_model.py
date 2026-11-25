@@ -379,6 +379,133 @@ def inline_formats_for(raw_exam: dict[str, Any], item: ContentObject) -> list[di
     return [dict(entry) for entry in owner.get("inline_formats", []) if _inline_entry_matches(entry, item)]
 
 
+_INLINE_STYLE_KEYS = ("font", "size_pt", "bold", "underline", "emphasis")
+
+
+def _inline_target(raw_exam: Mapping[str, Any], item: ContentObject) -> tuple[str, int, int]:
+    owner = format_owner(dict(raw_exam), item)
+    target = (
+        item.target
+        if item.block_index is not None and raw_exam["blocks"][item.block_index].get("type") == "question"
+        else "block"
+    )
+    target_index = item.target_index if target != "block" else item.line_index
+    text_offset = len(str((owner or {}).get("name", ""))) if item.target == "meta" else 0
+    return target, target_index, text_offset
+
+
+def _rebuild_inline_entries(
+    raw_exam: dict[str, Any],
+    item: ContentObject,
+    segments: list[tuple[int, int, dict[str, Any]]],
+) -> None:
+    """将合并后的字符区间写回对象的 inline_formats，并保持其他对象条目不变。"""
+
+    owner = format_owner(raw_exam, item)
+    if owner is None:
+        return
+    target, target_index, text_offset = _inline_target(raw_exam, item)
+    others = [entry for entry in owner.get("inline_formats", []) if not _inline_entry_matches(entry, item)]
+    merged: list[tuple[int, int, dict[str, Any]]] = []
+    for seg_start, seg_end, style in segments:
+        if seg_start >= seg_end or not style:
+            continue
+        if merged and merged[-1][1] == seg_start and merged[-1][2] == style:
+            merged[-1] = (merged[-1][0], seg_end, style)
+        else:
+            merged.append((seg_start, seg_end, style))
+    for seg_start, seg_end, style in merged:
+        others.append(
+            {
+                "target": target,
+                "target_index": target_index,
+                "line": item.line_index,
+                "text_offset": text_offset,
+                "start": seg_start,
+                "end": seg_end,
+                **style,
+            }
+        )
+    owner["inline_formats"] = others
+
+
+def merge_inline_format(
+    raw_exam: dict[str, Any],
+    item: ContentObject,
+    start: int,
+    end: int,
+    patch: Mapping[str, Any],
+) -> None:
+    """按 Word 语义将字符属性增量合并到选区，保留重叠区间的其他既有属性。"""
+
+    owner = format_owner(raw_exam, item)
+    if owner is None or start >= end:
+        return
+    existing = inline_formats_for(raw_exam, item)
+    points = {start, end}
+    for entry in existing:
+        points.add(int(entry.get("start", 0)))
+        points.add(int(entry.get("end", 0)))
+    ordered = sorted(points)
+    segments: list[tuple[int, int, dict[str, Any]]] = []
+    for left, right in zip(ordered, ordered[1:]):
+        style: dict[str, Any] = {}
+        for entry in existing:
+            if int(entry.get("start", 0)) <= left and right <= int(entry.get("end", 0)):
+                for key in _INLINE_STYLE_KEYS:
+                    if key in entry and entry[key] is not None:
+                        style[key] = entry[key]
+        if start <= left and right <= end:
+            for key in _INLINE_STYLE_KEYS:
+                if key in patch:
+                    if patch[key] is None:
+                        style.pop(key, None)
+                    else:
+                        style[key] = patch[key]
+        if style:
+            segments.append((left, right, style))
+    _rebuild_inline_entries(raw_exam, item, segments)
+
+
+def clear_inline_formats(
+    raw_exam: dict[str, Any],
+    item: ContentObject,
+    start: int | None = None,
+    end: int | None = None,
+) -> None:
+    """清除整个内容对象或指定选区内的全部局部字符格式。"""
+
+    owner = format_owner(raw_exam, item)
+    if owner is None:
+        return
+    if start is None or end is None:
+        owner["inline_formats"] = [
+            entry for entry in owner.get("inline_formats", []) if not _inline_entry_matches(entry, item)
+        ]
+        return
+    if start >= end:
+        return
+    existing = inline_formats_for(raw_exam, item)
+    points = {start, end}
+    for entry in existing:
+        points.add(int(entry.get("start", 0)))
+        points.add(int(entry.get("end", 0)))
+    ordered = sorted(points)
+    segments: list[tuple[int, int, dict[str, Any]]] = []
+    for left, right in zip(ordered, ordered[1:]):
+        if start <= left and right <= end:
+            continue
+        style: dict[str, Any] = {}
+        for entry in existing:
+            if int(entry.get("start", 0)) <= left and right <= int(entry.get("end", 0)):
+                for key in _INLINE_STYLE_KEYS:
+                    if key in entry and entry[key] is not None:
+                        style[key] = entry[key]
+        if style:
+            segments.append((left, right, style))
+    _rebuild_inline_entries(raw_exam, item, segments)
+
+
 def set_inline_format(
     raw_exam: dict[str, Any],
     item: ContentObject,
@@ -388,28 +515,7 @@ def set_inline_format(
 ) -> None:
     """Add a character format for one selected text range."""
 
-    owner = format_owner(raw_exam, item)
-    if owner is None or start >= end:
-        return
-    values = [
-        entry
-        for entry in owner.get("inline_formats", [])
-        if not (_inline_entry_matches(entry, item) and int(entry.get("start", 0)) < end and int(entry.get("end", 0)) > start)
-    ]
-    target = item.target if item.block_index is not None and raw_exam["blocks"][item.block_index].get("type") == "question" else "block"
-    target_index = item.target_index if target != "block" else item.line_index
-    values.append(
-        {
-            "target": target,
-            "target_index": target_index,
-            "line": item.line_index,
-            "text_offset": len(str(owner.get("name", ""))) if item.target == "meta" else 0,
-            "start": start,
-            "end": end,
-            **dict(spec),
-        }
-    )
-    owner["inline_formats"] = values
+    merge_inline_format(raw_exam, item, start, end, spec)
 
 
 def _inline_entry_matches(entry: Mapping[str, Any], item: ContentObject) -> bool:
@@ -436,7 +542,7 @@ def default_format_for(item: ContentObject) -> dict[str, Any]:
     if role == "exam_name":
         size, alignment = 16.0, "居中"
     elif role == "subject_name":
-        font, size, bold, alignment = "黑体", 22.0, True, "居中"
+        font, size, bold, alignment = "黑体", 22.0, False, "居中"
     elif role == "exam_meta":
         alignment = "居中"
     elif role == "section_title":
@@ -446,7 +552,7 @@ def default_format_for(item: ContentObject) -> dict[str, Any]:
     elif role in {"instruction", "notice"}:
         special, amount = "首行", 2.0
     elif role == "material_title":
-        font, bold, alignment = "黑体", True, "居中"
+        font, bold, alignment = "黑体", False, "居中"
     elif role == "material_author":
         font, alignment = "仿宋", "居中"
     elif role in {"material_body", "embedded", "composition_material"}:
@@ -579,11 +685,13 @@ __all__ = [
     "ContentObject",
     "all_content_objects",
     "build_object_locators",
+    "clear_inline_formats",
     "content_objects_for_block",
     "default_format_for",
     "default_format_for_exam",
     "format_owner",
     "inline_formats_for",
+    "merge_inline_format",
     "metadata_content_objects",
     "object_key",
     "objects_in_scope",

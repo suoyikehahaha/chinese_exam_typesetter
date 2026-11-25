@@ -10,66 +10,55 @@ from PIL import Image
 from app.flexible_importers import _collect_source_decorations
 from app.flexible_importers import _refine_exam_name
 from app.internal_preview_core import _material, render_internal_preview
-from desktop_app import CurrentDesktopApp
-
-
-class _Value:
-    def __init__(self, value: object = "") -> None:
-        self.value = value
-
-    def set(self, value: object) -> None:
-        self.value = value
-
-    def get(self) -> object:
-        return self.value
+from app.ui.main_window import CurrentDesktopApp
 
 
 class PreviewRegressionTests(unittest.TestCase):
     def test_option_template_reset_updates_question_and_controls(self) -> None:
-        question = {"option_layout": "two_column", "format": {}}
-        app = object.__new__(CurrentDesktopApp)
-        app.selected_block_index = 0
-        app.raw_exam = {"blocks": [{"type": "question", "question": question}]}
-        app.option_layout_var = _Value()
-        app.option_font_var = _Value()
-        app.option_size_var = _Value()
-        app.option_left_var = _Value()
-        app.option_hanging_var = _Value()
-        app.status_var = _Value()
-        app.loading_fields = False
-        app._push_direct_history = lambda: None
-        app._schedule_canvas_preview = lambda: None
+        from types import SimpleNamespace
 
-        app._restore_options_group()
+        question = {"option_layout": "two_column", "format": {}}
+        app = SimpleNamespace(
+            selected_block_index=0,
+            selected_content_object=None,
+            raw_exam={"blocks": [{"type": "question", "question": question}]},
+            _push_direct_history=lambda: None,
+            _set_status=lambda _msg: None,
+            _schedule_canvas_preview=lambda: None,
+        )
+
+        CurrentDesktopApp._restore_options_group(app)
 
         self.assertEqual(question["option_layout"], "vertical")
         self.assertEqual(question["format"]["option_font"], "宋体")
         self.assertEqual(question["format"]["option_left_indent_chars"], 1.5)
         self.assertEqual(question["format"]["option_hanging_indent_chars"], 1.7)
-        self.assertEqual(app.option_layout_var.get(), "四行单列")
 
     def test_global_template_reset_preserves_imported_metadata_text(self) -> None:
-        app = object.__new__(CurrentDesktopApp)
-        app.raw_exam = {
-            "metadata": {
-                "exam_name": "导入试卷名称",
-                "subject_name": "语　文",
-                "meta_text": "导入说明",
-                "target_pages": 12,
-            }
-        }
-        app.layout_path = Path("templates/layout.yaml")
-        app._global_commit_after = None
-        app.margin_top_var = _Value()
-        app.margin_bottom_var = _Value()
-        app.margin_left_var = _Value()
-        app.margin_right_var = _Value()
-        app.status_var = _Value()
-        app.loading_fields = False
-        app._push_direct_history = lambda: None
-        app._schedule_canvas_preview = lambda: None
+        from types import SimpleNamespace
+        from unittest.mock import Mock
 
-        app._restore_global_group()
+        app = SimpleNamespace(
+            raw_exam={
+                "metadata": {
+                    "exam_name": "导入试卷名称",
+                    "subject_name": "语　文",
+                    "meta_text": "导入说明",
+                    "target_pages": 12,
+                }
+            },
+            layout_path=Path("templates/layout.yaml"),
+            _global_commit_timer=Mock(),
+            _global_invalid=False,
+            _push_direct_history=lambda: None,
+            _load_global_fields=lambda: None,
+            _set_status=lambda _msg: None,
+            _queue_settings_feedback=lambda **_kw: None,
+            _set_settings_message=lambda _msg, **_kw: None,
+            _schedule_canvas_preview=lambda: None,
+        )
+
+        CurrentDesktopApp._restore_global_group(app)
 
         metadata = app.raw_exam["metadata"]
         self.assertEqual(metadata["exam_name"], "导入试卷名称")

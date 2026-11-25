@@ -62,11 +62,14 @@ class StructureRegressionTests(unittest.TestCase):
             self.assertFalse(validate_exam(ExamDocument.from_dict(raw)))
 
     def test_answer_score_display(self):
-        from desktop_app import CurrentDesktopApp
-        app = SimpleNamespace(raw_exam={'document_kind':'answer'}, score_total_label=Mock(), score_delta_label=Mock(), _refresh_warning_banner=Mock())
-        CurrentDesktopApp._refresh_score_display(app)
-        self.assertEqual(app.score_total_label.configure.call_args.kwargs['text'],'独立答案文档')
-        self.assertTrue(app._refresh_warning_banner.call_args.args[0].complete)
+        from app.ui.main_window import create_application
+        from app.ui.outline_panel import OutlinePanel
+
+        create_application([])
+        panel = OutlinePanel()
+        state = panel.refresh_score({"document_kind": "answer", "blocks": []})
+        self.assertEqual(panel.score_total_label.text(), "独立答案文档")
+        self.assertTrue(state.complete)
 
 class SeptemberLocalTests(unittest.TestCase):
     def test_six_local_documents(self):

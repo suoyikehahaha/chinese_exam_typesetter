@@ -8,6 +8,20 @@ from pathlib import Path
 EXPORT_SUFFIX = "（排版）"
 
 
+def safe_filename(value: str) -> str:
+    """移除 Windows 文件名禁用字符并清理首尾空白与点号。"""
+
+    forbidden = '<>:"/\\|?*'
+    return "".join("_" if char in forbidden else char for char in value).strip(" .")
+
+
+def typeset_name(value: str) -> str:
+    """生成带单一中文排版后缀的安全文件名。"""
+
+    name = safe_filename(value.strip())
+    return name if name.endswith(EXPORT_SUFFIX) else f"{name}{EXPORT_SUFFIX}"
+
+
 def imported_stem(source_path: Path | str | None) -> str:
     """Return the visible filename stem of an imported document."""
 
@@ -38,5 +52,7 @@ __all__ = [
     "EXPORT_SUFFIX",
     "default_export_basename",
     "imported_stem",
+    "safe_filename",
+    "typeset_name",
     "with_export_suffix",
 ]

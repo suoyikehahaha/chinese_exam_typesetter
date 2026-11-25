@@ -1,4 +1,4 @@
-"""Production Windows launcher and release diagnostics."""
+"""Production Windows launcher and release diagnostics (PySide6 Fluent edition)."""
 
 from __future__ import annotations
 
@@ -25,19 +25,11 @@ class DROPFILES(ctypes.Structure):
     ]
 
 
-def _set_tk_data_paths() -> None:
+def _set_runtime_directory() -> None:
     if not getattr(sys, "frozen", False):
         return
     root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)).resolve()
-    tcl_data = root / "_tcl_data"
-    tk_data = root / "_tk_data"
-    if not (tcl_data / "init.tcl").is_file():
-        raise RuntimeError(f"Tcl 运行数据不完整：{tcl_data}")
-    if not (tk_data / "tk.tcl").is_file():
-        raise RuntimeError(f"Tk 运行数据不完整：{tk_data}")
     os.chdir(root)
-    os.environ["TCL_LIBRARY"] = str(tcl_data)
-    os.environ["TK_LIBRARY"] = str(tk_data)
 
 
 def _load_application() -> object:
@@ -71,11 +63,16 @@ def _run_import_test(module: object, source: Path, output: Path) -> int:
         )
         return 1
     from app.score_summary import calculate_score_summary
+
     summary = calculate_score_summary(data)
     result = {
         "status": "IMPORT_OK",
         "document_kind": data.get("document_kind", "exam"),
-        "answer_numbers": [block.get("number") for block in data.get("blocks", []) if block.get("type") == "answer_question"],
+        "answer_numbers": [
+            block.get("number")
+            for block in data.get("blocks", [])
+            if block.get("type") == "answer_question"
+        ],
         "score_total": str(summary.total),
         "missing_scores": list(summary.missing_questions),
         "source": source.name,
@@ -115,7 +112,7 @@ def _run_font_test(output: Path) -> int:
     return 0 if values["all_cjk_fonts_valid"] else 2
 
 
-def _run_preview_test(module: object, source: Path, output: Path, *, print_proof=False) -> int:
+def _run_preview_test(module: object, source: Path, output: Path, *, print_proof: bool = False) -> int:
     """Render one real DOCX through the packaged internal preview service."""
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -215,6 +212,9 @@ def _run_export_test(module: object, source: Path, output: Path) -> int:
 
 def _run_startup_test(module: object, output: Path) -> int:
     from time import monotonic
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QLabel
+
     started = monotonic()
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
@@ -222,8 +222,8 @@ def _run_startup_test(module: object, output: Path) -> int:
         encoding="utf-8",
     )
     try:
-        app = module.CurrentDesktopApp(check_updates=False)
-        app.withdraw()
+        qt_app = module.create_application([])
+        window = module.CurrentDesktopApp(check_updates=False)
     except Exception as exc:
         output.write_text(
             json.dumps(
@@ -240,47 +240,58 @@ def _run_startup_test(module: object, output: Path) -> int:
 
     exit_code = 0
     ready = monotonic() - started
-    def failed(error):
+
+    def failed(error: object) -> None:
         nonlocal exit_code
         exit_code = 1
-        output.write_text(json.dumps({"status": "GUI_STARTUP_FAILED", "error": str(error)}, ensure_ascii=False), encoding="utf-8")
-        app._on_close()
+        output.write_text(
+            json.dumps({"status": "GUI_STARTUP_FAILED", "error": str(error)}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        window._shutdown_services()
+        window.close()
+        qt_app.quit()
 
-    def finish() -> None:
-        if app._closing:
+    def poll_ready() -> None:
+        if window._closing:
             return
-        if app._displayed_revision is None or not app.document_editor.preview_image_refs:
+        if window._displayed_revision is None or not window.preview_panel.preview_image_refs:
             if monotonic() - started >= 25:
                 failed("内置示例预览未能就绪")
             else:
-                app.after(45, finish)
+                QTimer.singleShot(50, poll_ready)
             return
+
+        ins = window.inspector_panel
         payload = {
             "status": "GUI_STARTUP_OK",
+            "ui_framework": "PySide6",
             "ui_constructed_seconds": round(ready, 3),
             "first_preview_seconds": round(monotonic() - started, 3),
             "version": module.APP_VERSION,
-            "tree": bool(app.tree.get_children("")),
-            "preview_service": type(app._preview_service).__module__,
-            "preview": type(app.document_editor).__name__,
-            "editable_objects": len(app._content_objects),
-            "inspector_tabs": len(app.inspector_tabs.tabs()),
+            "tree": window.outline_panel.tree.topLevelItemCount() > 0,
+            "preview_service": type(window._preview_service).__module__,
+            "preview": type(window.preview_panel).__name__,
+            "editable_objects": len(window._content_objects),
+            "inspector_tabs": ins.inspector_tabs.count(),
             "reference_template_available": "national_ii_2026" in module.PRESET_LABELS,
-            "default_template": app.raw_exam.get("metadata", {}).get("layout_preset"),
-            "template_is_fixed_label": app.template_label.winfo_class() == "TLabel",
-            "settings_tab": app.inspector_tabs.tab(2, "text"),
-            "header_settings_collapsed": not app.header_settings_group.expanded,
-            "apply_settings_action": app.apply_page_settings_button.cget("text"),
-            "drop_enabled": bool(app.drop_enabled),
+            "default_template": window.raw_exam.get("metadata", {}).get("layout_preset"),
+            "template_is_fixed_label": isinstance(ins.template_label, QLabel),
+            "settings_tab": ins.inspector_tabs.tabText(2),
+            "header_settings_collapsed": not ins.header_settings_group.expanded,
+            "apply_settings_action": ins.apply_page_settings_button.text(),
+            "drop_enabled": bool(window.drop_enabled and window.acceptDrops()),
             "update_address_input_removed": not hasattr(module, "UpdateSettingsDialog")
-            and not hasattr(app, "open_update_settings"),
+            and not hasattr(window, "open_update_settings"),
         }
         output.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        app._on_close()
+        window._shutdown_services()
+        window.close()
+        qt_app.quit()
 
-    app._finish_task_error = failed
-    app.after_idle(finish)
-    app.mainloop()
+    window._finish_task_error = failed
+    QTimer.singleShot(50, poll_ready)
+    qt_app.exec()
     return exit_code
 
 
@@ -303,18 +314,15 @@ def _make_drop_handle(path: Path) -> int:
 
 
 def _run_drop_message_test(module: object, source: Path, output: Path) -> int:
-    app = module.CurrentDesktopApp()
+    from PySide6.QtCore import QTimer
+
+    qt_app = module.create_application([])
+    window = module.CurrentDesktopApp(check_updates=False)
+    window.show()
     attempts = 0
 
     def begin() -> None:
-        state = getattr(app, "_exam_drop_state", None)
-        if not state:
-            app.after(100, begin)
-            return
-        # Explorer targets the accepting top-level window.  The Tk child is
-        # registered as a compatibility fallback, while diagnostics exercise
-        # the same top-level path used by a real shell drop.
-        hwnd = int(state["handles"][-1])
+        hwnd = int(window.winId())
         handle = _make_drop_handle(source)
         user32 = ctypes.windll.user32
         user32.SendMessageW.argtypes = [
@@ -325,34 +333,34 @@ def _run_drop_message_test(module: object, source: Path, output: Path) -> int:
         ]
         user32.SendMessageW.restype = ctypes.c_ssize_t
         user32.SendMessageW(hwnd, WM_DROPFILES, handle, 0)
-        app.after(150, check)
+        QTimer.singleShot(150, check)
 
     def check() -> None:
         nonlocal attempts
         attempts += 1
-        current = Path(app.current_exam_path).resolve() if app.current_exam_path else None
+        current = Path(window.current_exam_path).resolve() if window.current_exam_path else None
         if current == source.resolve() or attempts >= 100:
             finish()
         else:
-            app.after(150, check)
+            QTimer.singleShot(150, check)
 
     def finish() -> None:
         payload = {
-            "drop_enabled": bool(app.drop_enabled),
-            "source": Path(app.current_exam_path).name if app.current_exam_path else "",
-            "questions": _question_numbers(app.raw_exam),
-            "status": app.status_var.get(),
-            "windows_message_received": bool(app.current_exam_path),
-            "drop_metrics": dict(
-                getattr(app, "_exam_drop_state", {}).get("metrics", {})
-            ),
+            "drop_enabled": bool(window.drop_enabled and window.acceptDrops()),
+            "source": Path(window.current_exam_path).name if window.current_exam_path else "",
+            "questions": _question_numbers(window.raw_exam),
+            "status": window.status_text(),
+            "windows_message_received": bool(window.current_exam_path),
+            "drop_metrics": dict(window._drop_metrics),
         }
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        app._on_close()
+        window._shutdown_services()
+        window.close()
+        qt_app.quit()
 
-    app.after(400, begin)
-    app.mainloop()
+    QTimer.singleShot(350, begin)
+    qt_app.exec()
     return 0
 
 
@@ -405,7 +413,7 @@ def _run_update_test(module: object, output: Path, *, download: bool) -> int:
 
 
 def main() -> int:
-    _set_tk_data_paths()
+    _set_runtime_directory()
     module = _load_application()
     if "--font-test-output" in sys.argv:
         return _run_font_test(Path(sys.argv[sys.argv.index("--font-test-output") + 1]))

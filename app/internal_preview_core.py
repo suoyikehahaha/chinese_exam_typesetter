@@ -176,7 +176,7 @@ def _draw_rich_line(
             baseline = y + max(2, int(getattr(chosen, "size", 12))) + 1
             draw.line((cursor, baseline, cursor + width, baseline), fill="#111111", width=1)
         if segment_emphasis:
-            dot_y = y + max(2, int(getattr(chosen, "size", 12))) + 3
+            dot_y = y + max(2, int(getattr(chosen, "size", 12))) + (5 if segment_underline else 3)
             for index in range(len(value)):
                 char_width = draw.textlength(value[index], font=chosen)
                 draw.ellipse((cursor + char_width * 0.35 - 1, dot_y - 1, cursor + char_width * 0.35 + 1, dot_y + 1), fill="#111111")

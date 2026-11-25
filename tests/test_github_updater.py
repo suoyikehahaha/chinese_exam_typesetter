@@ -3,9 +3,8 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import unittest
-import queue
 from types import SimpleNamespace
+import unittest
 from unittest.mock import Mock, patch
 
 from app.github_updater import (
@@ -31,51 +30,59 @@ class _Response:
 
 
 class GitHubUpdaterTests(unittest.TestCase):
-    def _desktop(self, kind, payload, automatic=True):
-        from desktop_app import CurrentDesktopApp
+    def _desktop(self, *, automatic: bool = True):
+        from app.ui.main_window import CurrentDesktopApp
+
         app = SimpleNamespace(
-            _update_messages=queue.Queue(), _update_in_progress=True,
-            _update_automatic=automatic, _help_menu=Mock(), status_var=Mock(), busy_bar=Mock(),
-            after=Mock(), _poll_update_messages=Mock(), _download_update=Mock(),
+            _pending_update=None,
+            _update_in_progress=True,
+            _update_automatic=automatic,
+            _busy=False,
+            _check_update_action=Mock(),
+            _set_status=Mock(),
+            _set_busy=Mock(),
+            _show_error=Mock(),
+            _ask_yes_no=Mock(return_value=False),
+            _download_update=Mock(),
+            _signals=Mock(),
         )
-        app._update_messages.put((kind, payload))
         return app, CurrentDesktopApp
 
-    def test_automatic_latest_check_is_quiet(self):
-        app, cls = self._desktop('checked', SimpleNamespace(newer=False))
-        with patch('desktop_app.messagebox.showinfo') as show:
-            cls._poll_update_messages(app)
+    def test_automatic_latest_check_is_quiet(self) -> None:
+        app, cls = self._desktop(automatic=True)
+        with patch("app.ui.session_actions.QMessageBox.information") as show:
+            cls._on_update_checked(app, SimpleNamespace(newer=False))
         show.assert_not_called()
-        app.busy_bar.stop.assert_not_called()
+        app._set_busy.assert_not_called()
         self.assertFalse(app._update_in_progress)
 
-    def test_automatic_failure_preserves_ui_and_reports_retry(self):
-        app, cls = self._desktop('update_error', 'offline')
-        with patch('desktop_app.messagebox.showerror') as show:
-            cls._poll_update_messages(app)
-        show.assert_not_called()
-        app.status_var.set.assert_not_called()
-        self.assertIn('重新检查', app._help_menu.entryconfigure.call_args.kwargs['label'])
+    def test_automatic_failure_preserves_ui_and_reports_retry(self) -> None:
+        app, cls = self._desktop(automatic=True)
+        cls._on_update_error(app, "offline")
+        app._show_error.assert_not_called()
+        app._set_status.assert_not_called()
+        self.assertIn("重新检查", app._check_update_action.setText.call_args.args[0])
         self.assertFalse(app._update_in_progress)
 
-    def test_new_release_requires_download_confirmation(self):
-        info = SimpleNamespace(newer=True, version='0.2.0', name='Release', asset_name='test.exe', asset_size=1024)
-        app, cls = self._desktop('checked', info)
-        with patch('desktop_app.messagebox.askyesno', return_value=False) as ask:
-            cls._poll_update_messages(app)
-        ask.assert_called_once()
+    def test_new_release_requires_download_confirmation(self) -> None:
+        info = SimpleNamespace(
+            newer=True, version="0.4.0", name="Release", asset_name="test.exe", asset_size=1024
+        )
+        app, cls = self._desktop(automatic=True)
+        cls._on_update_checked(app, info)
+        app._ask_yes_no.assert_called_once()
         app._download_update.assert_not_called()
 
-    def test_duplicate_checks_do_not_start_workers(self):
-        app, cls = self._desktop('checked', None)
-        with patch('desktop_app.threading.Thread') as thread:
+    def test_duplicate_checks_do_not_start_workers(self) -> None:
+        app, cls = self._desktop(automatic=True)
+        with patch("app.ui.session_actions.threading.Thread") as thread:
             cls.check_for_updates(app)
         thread.assert_not_called()
 
-    def test_manual_latest_check_shows_result(self):
-        app, cls = self._desktop('checked', SimpleNamespace(newer=False), automatic=False)
-        with patch('desktop_app.messagebox.showinfo') as show:
-            cls._poll_update_messages(app)
+    def test_manual_latest_check_shows_result(self) -> None:
+        app, cls = self._desktop(automatic=False)
+        with patch("app.ui.session_actions.QMessageBox.information") as show:
+            cls._on_update_checked(app, SimpleNamespace(newer=False))
         show.assert_called_once()
 
     def test_official_repository_is_fixed(self) -> None:
@@ -112,9 +119,9 @@ class GitHubUpdaterTests(unittest.TestCase):
         self.assertEqual(info.asset_name, "ChineseExamTypesetter_0.2.0.exe")
 
     @unittest.skipUnless(os.name == "nt", "Windows native HTTPS client")
-    def test_native_transport_rechecks_https_and_returns_exact_bytes(self):
-        from app.github_updater import _open_release_request
+    def test_native_transport_rechecks_https_and_returns_exact_bytes(self) -> None:
         from urllib.request import Request
+        from app.github_updater import _open_release_request
 
         def transfer(args, *, stdout, **kwargs):
             self.assertEqual(args[args.index("--proto-redir") + 1], "=https")
@@ -124,8 +131,10 @@ class GitHubUpdaterTests(unittest.TestCase):
             stdout.write(b"release bytes")
             return SimpleNamespace(returncode=0)
 
-        with patch("app.github_updater.urlopen", side_effect=FileNotFoundError()), \
-             patch("app.github_updater.subprocess.run", side_effect=transfer):
+        with (
+            patch("app.github_updater.urlopen", side_effect=FileNotFoundError()),
+            patch("app.github_updater.subprocess.run", side_effect=transfer),
+        ):
             with _open_release_request(Request(GITHUB_API), 10) as stream:
                 self.assertEqual(stream.read(), b"release bytes")
 

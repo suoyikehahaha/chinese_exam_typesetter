@@ -2,12 +2,14 @@
 
 ## 环境与入口
 
-源码面向 Windows 与64位 Python 3.11+，需要 Tkinter 和常用中文字体。依赖分别列在 `requirements-runtime.txt`、`requirements-build.txt`。推荐虚拟环境，运行与打包命令见仓库 README。
+源码面向 Windows 与 64 位 Python 3.11+，基于 PySide6（Qt 6）构建微软 Fluent 风格桌面界面，运行需要常用中文字体。依赖分别列在 `requirements-runtime.txt`、`requirements-build.txt`。推荐虚拟环境，运行与打包命令见仓库 README。
 
 | 职责 | 当前入口 |
 | --- | --- |
 | 桌面启动与内部诊断 | `windows_launcher.py` |
-| 编辑、导入调度与预览交互 | `desktop_app.py` |
+| 桌面入口与主工作台 | `desktop_app.py`、`app/ui/main_window.py` |
+| 三栏面板与富文本画布 | `app/ui/theme.py`、`app/ui/outline_panel.py`、`app/ui/preview_panel.py`、`app/ui/rich_document_editor.py`、`app/ui/inspector_panel.py` |
+| 编辑与会话异步调度 | `app/ui/editing_actions.py`、`app/ui/session_actions.py`、`app/ui/dialogs.py` |
 | DOCX/DOC 导入 | `app/current_importer.py`，结构规则在 `app/flexible_importers.py` |
 | 独立答案与附录 | `app/answer_typesetting.py` |
 | 结构模型与校验 | `app/models/`、`app/validators/` |
@@ -29,12 +31,12 @@ DOCX处理不依赖办公软件。旧版DOC转换按需使用Word/WPS；预览�
 
 一部分测试读取开发机上的真实试卷，未找到原件时会显示 `skipped`。这些原件、学生数据、未公开试题不进入仓库。不要为消除跳过结果而上传真实文档；通用问题应增加合成小样本，真实文档另作本地验收。测试成功数与跳过数应同时记录。
 
-测试集同时包含unittest类与pytest函数，统一使用pytest发现全部用例。GUI回归使用真实Tk控件及隔离的对话框，不会替用户操作现有文档窗口。`workbench_ui.py`负责界面布局，`workbench_state.py`负责草稿与文件名规则，`reference_profile.py`负责用户模板兼容规则。
+测试集同时包含 unittest 类与 pytest 函数，统一使用 pytest 发现全部用例。GUI 回归使用真实 PySide6 控件及隔离的对话框，不会替用户操作现有文档窗口。`app/ui/` 负责三栏 Fluent 界面与交互调度，`workbench_state.py` 负责草稿与文件名规则，`reference_profile.py` 负责用户模板兼容规则。
 
 内部诊断模式可验证打包后的实际代码。已安装 Word 或 LibreOffice 时，也可以用 `--print-proof-test` 对同一份文档检查打印引擎和实际页数。
 
 ```powershell
-$exe = (Resolve-Path '.\output\release\ChineseExamTypesetter_0.3.1.exe').Path
+$exe = (Resolve-Path '.\output\release\ChineseExamTypesetter_0.4.0.exe').Path
 $inputDoc = (Resolve-Path 'D:\测试目录\脱敏样例.docx').Path
 $diagnosticDir = (New-Item -ItemType Directory -Force '.\work').FullName
 foreach ($mode in @('import', 'preview', 'export')) {

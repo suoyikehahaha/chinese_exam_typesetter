@@ -93,24 +93,23 @@ class WordWorkflowTests(unittest.TestCase):
             self.assertFalse(list(Path(folder).glob("exam-export-*")))
 
     def test_desktop_locked_file_prompt_can_retry_same_destination(self) -> None:
-        from desktop_app import CurrentDesktopApp
+        from app.ui.main_window import CurrentDesktopApp
 
         target = Path("D:/题库/语文试题（排版）.docx")
         app = SimpleNamespace(
             _export_in_progress=True,
-            busy=True,
-            busy_bar=Mock(),
-            status_var=Mock(),
-            after=Mock(),
+            _set_busy=Mock(),
+            _set_status=Mock(),
+            _ask_retry_cancel=Mock(return_value=True),
             start_export=Mock(),
         )
         error = ExportDestinationError(target)
-        with patch("desktop_app.messagebox.askretrycancel", return_value=True) as prompt:
+        with patch("app.ui.session_actions.QTimer.singleShot") as timer_shot:
             CurrentDesktopApp._finish_export(app, error)
-        self.assertFalse(app.busy)
         self.assertFalse(app._export_in_progress)
-        self.assertIn("关闭目标文件", prompt.call_args.args[1])
-        delay, callback = app.after.call_args.args
+        app._set_busy.assert_called_with(False)
+        self.assertIn("关闭目标文件", app._ask_retry_cancel.call_args.args[1])
+        delay, callback = timer_shot.call_args.args
         self.assertEqual(delay, 100)
         callback()
         app.start_export.assert_called_once_with(target.parent, target.stem, True, False)

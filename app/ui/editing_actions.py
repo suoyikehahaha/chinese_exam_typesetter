@@ -1,4 +1,4 @@
-"""主工作台的编辑交互、格式校验、撤销重做与整卷设置逻辑。"""
+"""主工作台的富文本直编联动、格式校验、撤销重做与整卷设置逻辑。"""
 
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ from ..inspector_model import (
     objects_in_scope,
     paragraph_format_for,
     set_content_object_text,
-    set_inline_format,
     set_paragraph_format,
 )
 from ..layout_presets import DEFAULT_PRESET, PRESET_LABELS, preset_page
@@ -32,7 +31,7 @@ from .outline_panel import block_display_label
 
 
 class EditingActionsMixin:
-    """封装大纲联动、内容对象编辑、格式校验、批量应用、撤销重做与整卷设置。"""
+    """封装富文本纸面直编、大纲联动、精细排版校验、批量套用、撤销重做与整卷设置。"""
 
     # ==================== 富文本画布双向实时联动 ====================
 
@@ -55,24 +54,13 @@ class EditingActionsMixin:
         if rich is not None and keys:
             rich.refresh_objects(self.raw_exam, keys)
 
-    def _rich_local_selection_for(self, item: ContentObject | None) -> tuple[int, int] | None:
-        rich = self._rich_editor()
-        if rich is None or item is None or not rich.has_text_selection():
-            return None
-        segs = rich.selected_segments()
-        if len(segs) == 1 and segs[0].item.key == item.key and not segs[0].whole_object and segs[0].end > segs[0].start:
-            return segs[0].start, segs[0].end
-        return None
-
     def _on_rich_cursor_object_changed(self, item: ContentObject) -> None:
-        """在仿真纸面点击或拖选文本时，静默同步左栏大纲和右栏属性检查器（不跳转、不抢焦点）。"""
+        """在仿真纸面点击或拖选文本时，静默同步左栏大纲和右栏精细面板（不跳转、不抢焦点）。"""
 
         if self._import_in_progress:
             return
         if self.selected_content_object is not None and self.selected_content_object.key == item.key:
             return
-        if self.selected_content_object is not None:
-            self._commit_current_text(schedule_preview=False)
 
         block_index = item.block_index
         ins = self.inspector_panel
@@ -100,21 +88,15 @@ class EditingActionsMixin:
                     if block is not None
                     else metadata_content_objects(self.raw_exam)
                 )
-                ins.populate_objects(self._content_objects)
             finally:
                 ins.set_loading(False)
 
         matched = next((obj for obj in self._content_objects if obj.key == item.key), item)
         self.selected_content_object = matched
-        ins.select_object_key(matched.key)
         self._load_content_object(matched)
-        header_selected = matched.block_index is None
-        ins.set_format_tab_enabled(not header_selected)
-        if ins.inspector_tabs.currentIndex() == 1 and header_selected:
-            ins.inspector_tabs.setCurrentIndex(0)
 
     def _on_rich_object_text_edited(self, old_item: ContentObject, new_text: str) -> None:
-        """在仿真纸面直接改字后，实时写回唯一数据源并同步大纲、右栏与后台预览。"""
+        """在仿真纸面直接改字后，实时写回唯一数据源并同步大纲、整卷字段与后台预览。"""
 
         if self._import_in_progress:
             return
@@ -135,13 +117,6 @@ class EditingActionsMixin:
         ]
         if self.selected_content_object is not None and self.selected_content_object.key == old_item.key:
             self.selected_content_object = updated
-            self.inspector_panel.update_object_summary(updated)
-            self.inspector_panel.set_loading(True)
-            try:
-                if self.inspector_panel.stem_text.toPlainText() != new_text:
-                    self.inspector_panel.stem_text.setPlainText(new_text)
-            finally:
-                self.inspector_panel.set_loading(False)
         self.outline_panel.update_block_label(self.raw_exam, old_item.block_index)
         if old_item.block_index is None:
             self._load_global_fields()
@@ -274,53 +249,7 @@ class EditingActionsMixin:
         self._set_status(f"已更新 {len(keys)} 个段落的排版属性。")
         self._schedule_canvas_preview()
 
-    def _on_inspector_inline_decoration(self, patch: dict[str, Any]) -> None:
-        """右栏属性检查器触发下划线或着重号设置（优先作用于选区，无选区则作用于当前整段）。"""
-
-        item = self.selected_content_object
-        if self._import_in_progress or item is None or item.block_index is None:
-            return
-        self._commit_current_text(schedule_preview=False)
-        item = self.selected_content_object
-        if item is None or not item.text:
-            return
-        selection = self.inspector_panel.text_selection_range() or self._rich_local_selection_for(item)
-        start, end = selection if selection is not None else (0, len(item.text))
-        if start >= end:
-            return
-        self._push_direct_history()
-        merge_inline_format(self.raw_exam, item, start, end, patch)
-        self.inspector_panel.apply_editor_style(
-            item,
-            paragraph_format_for(self.raw_exam, item),
-            inline_formats_for(self.raw_exam, item),
-        )
-        self._refresh_rich_objects([item.key])
-        self._set_status("字符装饰已应用到选中文字。" if selection else "字符装饰已应用到当前内容对象。")
-        self._schedule_canvas_preview()
-
-    def _on_inspector_clear_inline(self) -> None:
-        """右栏属性检查器触发清除局部字符格式。"""
-
-        item = self.selected_content_object
-        if self._import_in_progress or item is None or item.block_index is None:
-            return
-        self._commit_current_text(schedule_preview=False)
-        item = self.selected_content_object
-        if item is None:
-            return
-        selection = self.inspector_panel.text_selection_range() or self._rich_local_selection_for(item)
-        self._push_direct_history()
-        if selection is not None:
-            clear_inline_formats(self.raw_exam, item, selection[0], selection[1])
-        else:
-            clear_inline_formats(self.raw_exam, item)
-        self._load_content_object(item)
-        self._refresh_rich_objects([item.key])
-        self._set_status("已清除局部字符格式。")
-        self._schedule_canvas_preview()
-
-    # ==================== 结构大纲、对象选择与实时编辑 ====================
+    # ==================== 结构大纲与对象选择 ====================
 
     def _on_outline_select(self, block_index: int | None) -> None:
         if self._import_in_progress:
@@ -357,8 +286,6 @@ class EditingActionsMixin:
                 if block is not None
                 else metadata_content_objects(self.raw_exam)
             )
-            ins.populate_objects(self._content_objects)
-
             if self._content_objects:
                 self._select_object(self._content_objects[0].key, navigate=False)
             else:
@@ -378,11 +305,11 @@ class EditingActionsMixin:
         item = next((obj for obj in self._content_objects if obj.key == key), None)
         if item is None:
             return
-        if self.selected_content_object is not None and self.selected_content_object.key != item.key:
-            self._commit_current_text(schedule_preview=False)
+        rich = self._rich_editor()
+        if rich is not None:
+            rich.flush_pending_text()
 
         self.selected_content_object = item
-        self.inspector_panel.select_object_key(item.key)
         self._load_content_object(item)
 
         if navigate:
@@ -408,15 +335,7 @@ class EditingActionsMixin:
         )
 
     def _on_inspector_tab_changed(self, selected: int) -> None:
-        if selected != 0:
-            self._commit_current_text(schedule_preview=True)
-        header_selected = self.selected_content_object is None or self.selected_content_object.block_index is None
-        self.inspector_panel.set_format_tab_enabled(not header_selected)
-        if selected == 1 and header_selected:
-            self.inspector_panel.inspector_tabs.setCurrentIndex(0)
-            selected = 0
-
-        if selected == 2:
+        if selected == 1:
             self.inspector_panel.set_selection_title("整卷设置 · 影响所有页面")
         elif self.selected_block_index is not None:
             block = self.raw_exam["blocks"][self.selected_block_index]
@@ -424,28 +343,20 @@ class EditingActionsMixin:
         else:
             self.inspector_panel.set_selection_title("卷首信息")
 
-    def _update_selection_hint(self) -> None:
-        if self.inspector_panel.text_selection_range() is not None:
-            self.inspector_panel.selection_hint_label.setText("已选择文字，字体、字号和加粗只作用于选中文字。")
-        elif self.selected_content_object is not None:
-            self.inspector_panel.selection_hint_label.setText(
-                f"当前对象：{self.selected_content_object.label}。段落设置作用于整个对象。"
-            )
-
     def _jump_to_block(self, block_index: int) -> None:
         key: object = block_index
         if self.selected_content_object is not None and self.selected_content_object.block_index == block_index:
             key = self.selected_content_object.key
         self.preview_panel.scroll_to(key, highlight=True)
 
-    # ==================== 编辑提交、格式校验与撤销重做 ====================
+    # ==================== 编辑提交、精细排版校验与撤销重做 ====================
 
     def _invalidate_edit(self) -> None:
         self._revision += 1
         self._requested_revision = None
         self._cancel_preview()
         self.raw_exam.get("metadata", {}).pop("page_spacing_scale", None)
-        self.preview_panel.set_update_message("修改已记录，正在更新预览…", tone="info")
+        self.preview_panel.set_update_message("修改已记录，正在更新预览…", tone="info", show_banner=False)
         self._autosave_timer.start()
 
     def _push_direct_history(self) -> None:
@@ -456,55 +367,10 @@ class EditingActionsMixin:
         self.redo_stack.clear()
         QTimer.singleShot(0, self._refresh_history_buttons)
 
-    def _schedule_text_commit(self) -> None:
-        if self._import_in_progress or self.selected_content_object is None:
-            return
-        if self.inspector_panel.stem_text.toPlainText() == self.selected_content_object.text:
-            return
-        self._invalidate_edit()
-        self._set_status("文字已修改，正在等待同步…")
-        self._text_commit_timer.start()
-
-    def _commit_text_after_delay(self) -> None:
-        self._commit_current_text(schedule_preview=True)
-
-    def _commit_current_text(self, *, schedule_preview: bool) -> bool:
-        item = self.selected_content_object
-        if item is None or self._import_in_progress:
-            return False
-        value = self.inspector_panel.stem_text.toPlainText()
-        if value == item.text:
-            return False
-        self._push_direct_history()
-        set_content_object_text(self.raw_exam, item, value)
-        updated = ContentObject(
-            item.key,
-            item.block_index,
-            item.target,
-            item.target_index,
-            item.role,
-            item.label,
-            value,
-            item.line_index,
-        )
-        self.selected_content_object = updated
-        self._content_objects = [
-            updated if current.key == item.key else current for current in self._content_objects
-        ]
-        self.inspector_panel.update_object_summary(updated)
-        self.outline_panel.update_block_label(self.raw_exam, item.block_index)
+    def apply_current_question(self, *, silent: bool = False) -> bool:
         rich = self._rich_editor()
         if rich is not None:
-            rich.update_object_text(updated, value)
-        if item.block_index is None:
-            self._load_global_fields()
-        self._set_status("内容已同步，正在更新预览。")
-        if schedule_preview:
-            self._schedule_canvas_preview()
-        return True
-
-    def apply_current_question(self, *, silent: bool = False) -> bool:
-        self._commit_current_text(schedule_preview=False)
+            rich.flush_pending_text()
         if self.selected_block_index is None:
             return True
         blocks = self.raw_exam.get("blocks", [])
@@ -568,22 +434,29 @@ class EditingActionsMixin:
         self._schedule_canvas_preview()
 
     def _format_spec_from_controls(self) -> dict[str, Any]:
+        """基于当前对象的真实字形/对齐/行距，叠加右栏精细缩进、段距与分页参数并校验。"""
+
         ins = self.inspector_panel
+        base = (
+            paragraph_format_for(self.raw_exam, self.selected_content_object)
+            if self.selected_content_object is not None
+            else {}
+        )
         special = ins.special_indent_combo.currentText()
         amount = float(ins.special_amount_edit.text().strip())
         first = amount if special == "首行" else (-amount if special == "悬挂" else 0.0)
         return validate_format(
             {
-                "font": ins.font_combo.currentText(),
-                "size_pt": float(ins.size_combo.currentText().strip()),
-                "bold": ins.bold_button.isChecked(),
+                "font": str(base.get("font", "宋体")),
+                "size_pt": float(base.get("size_pt", 10.5)),
+                "bold": bool(base.get("bold", False)),
+                "alignment": str(base.get("alignment", "左对齐")),
+                "line_spacing": float(base.get("line_spacing", 1.25)),
                 "left_indent_chars": float(ins.left_indent_edit.text().strip()),
                 "right_indent_chars": float(ins.right_indent_edit.text().strip()),
                 "special_indent": special,
                 "special_indent_chars": amount,
                 "first_line_indent_chars": first,
-                "alignment": ins.alignment(),
-                "line_spacing": float(ins.line_spacing_combo.currentText().strip()),
                 "space_before_pt": float(ins.space_before_edit.text().strip()),
                 "space_after_pt": float(ins.space_after_edit.text().strip()),
                 "keep_with_next": ins.keep_next_check.isChecked(),
@@ -599,47 +472,12 @@ class EditingActionsMixin:
     @staticmethod
     def _friendly_format_error(exc: Exception) -> str:
         text = str(exc)
-        return "请输入有效数字：字号 5～72 磅，行距 0.5～4 倍，缩进 0～20 字符。" if "float" in text else text
-
-    def _on_font_changed(self) -> None:
-        if self._import_in_progress or self.selected_content_object is None:
-            return
-        try:
-            spec = self._format_spec_from_controls()
-            font_spec = {"font": spec["font"], "size_pt": spec["size_pt"], "bold": spec["bold"]}
-        except ValueError as exc:
-            self.inspector_panel.set_format_error(self._friendly_format_error(exc))
-            return
-        self.inspector_panel.set_format_error("")
-        self._commit_current_text(schedule_preview=False)
-        self._push_direct_history()
-        selection = self.inspector_panel.text_selection_range() or self._rich_local_selection_for(
-            self.selected_content_object
-        )
-        if selection is not None:
-            set_inline_format(self.raw_exam, self.selected_content_object, selection[0], selection[1], font_spec)
-            self.inspector_panel.selection_hint_label.setText("字体已应用到选中文字。")
-        else:
-            set_paragraph_format(self.raw_exam, self.selected_content_object, spec)
-            if self.selected_content_object.text:
-                merge_inline_format(
-                    self.raw_exam,
-                    self.selected_content_object,
-                    0,
-                    len(self.selected_content_object.text),
-                    {"font": None, "size_pt": None, "bold": None},
-                )
-            self.inspector_panel.selection_hint_label.setText("字体已应用到当前内容对象。")
-        self.inspector_panel.apply_editor_style(
-            self.selected_content_object,
-            paragraph_format_for(self.raw_exam, self.selected_content_object),
-            inline_formats_for(self.raw_exam, self.selected_content_object),
-        )
-        self._refresh_rich_objects([self.selected_content_object.key])
-        self._schedule_canvas_preview()
+        return "请输入有效数字：缩进 0～20 字符，段前/段后 0～72 磅。" if "float" in text else text
 
     def _on_paragraph_changed(self) -> None:
         if self._import_in_progress or self.selected_content_object is None:
+            return
+        if self.selected_content_object.block_index is None:
             return
         try:
             spec = self._format_spec_from_controls()
@@ -691,6 +529,9 @@ class EditingActionsMixin:
     def _apply_same_type(self) -> None:
         if self._import_in_progress or self.selected_content_object is None:
             return
+        if self.selected_content_object.block_index is None:
+            self._set_status("卷首版式由国标模板统一控制，不支持批量套用。")
+            return
         try:
             spec = self._format_spec_from_controls()
         except ValueError:
@@ -721,14 +562,12 @@ class EditingActionsMixin:
             self._restore_options_group()
             return
         item = self.selected_content_object
-        if item is None:
+        if item is None or item.block_index is None:
             return
         self._push_direct_history()
         current = paragraph_format_for(self.raw_exam, item)
         template = default_format_for_exam(self.raw_exam, item)
-        if group == "font":
-            keys = ("font", "size_pt", "bold")
-        elif group == "pagination":
+        if group == "pagination":
             keys = ("keep_with_next", "page_break_before")
         else:
             keys = (
@@ -746,8 +585,6 @@ class EditingActionsMixin:
         for key in keys:
             current[key] = template[key]
         set_paragraph_format(self.raw_exam, item, current)
-        if group == "font":
-            clear_inline_formats(self.raw_exam, item)
         self._load_content_object(item)
         self._refresh_rich_objects([item.key])
         self._set_status("已恢复当前分组的模板默认值。")
@@ -934,9 +771,7 @@ class EditingActionsMixin:
             key = self.selected_content_object.key
             self._content_objects = metadata_content_objects(self.raw_exam)
             self.selected_content_object = next((obj for obj in self._content_objects if obj.key == key), None)
-            ins.populate_objects(self._content_objects)
             if self.selected_content_object is not None:
-                ins.select_object_key(self.selected_content_object.key)
                 self._load_content_object(self.selected_content_object)
 
         self._sync_rich_document(preserve_scroll=True)

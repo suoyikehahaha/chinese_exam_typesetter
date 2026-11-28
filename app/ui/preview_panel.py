@@ -117,6 +117,7 @@ class PreviewPanel(QFrame):
     printProofToggled = Signal()
     refreshRequested = Signal()
     viewModeChanged = Signal(str)  # "rich" | "pages"
+    statusSummaryChanged = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -267,12 +268,12 @@ class PreviewPanel(QFrame):
         self.pages_controls.hide()
         t_layout.addWidget(self.pages_controls)
 
-        # 富文本直编模式下的精简引导微字
-        self.rich_mode_tip = QLabel("像 Word 一样直接点选或拖选文字，即可设定字体、加粗、下划线与着重号", toolbar)
-        self.rich_mode_tip.setObjectName("MutedHint")
-        t_layout.addWidget(self.rich_mode_tip, 1)
-
         t_layout.addStretch(1)
+
+        # 轻量当前页数胶囊（仅在需要时展示在视图栏右侧，不额外占一行）
+        self.page_status_label = QLabel("1 / 1 页", toolbar)
+        self.page_status_label.setObjectName("MutedHint")
+        t_layout.addWidget(self.page_status_label)
 
         # 刷新与打印校对簇
         refresh_btn = QPushButton(toolbar)
@@ -295,30 +296,37 @@ class PreviewPanel(QFrame):
 
         root.addWidget(toolbar)
 
-        # 极简预览反馈微条
-        feedback_bar = QFrame(self)
-        feedback_bar.setStyleSheet(
-            f"QFrame {{ background-color: #F7FAFD; border-bottom: 1px solid {PALETTE['border']}; }}"
+        # 按需浮现的轻量提示条（默认隐藏，仅在页边距核对、打印校对或报错时出现，释放纸面高度）
+        self.feedback_bar = QFrame(self)
+        self.feedback_bar.setStyleSheet(
+            f"QFrame {{ background-color: #F4F8FD; border-bottom: 1px solid {PALETTE['border']}; }}"
         )
-        fb_layout = QHBoxLayout(feedback_bar)
-        fb_layout.setContentsMargins(14, 4, 14, 4)
+        fb_layout = QHBoxLayout(self.feedback_bar)
+        fb_layout.setContentsMargins(14, 4, 10, 4)
         fb_layout.setSpacing(8)
 
-        self.update_message_label = QLabel("已就绪：可直接在纸面选字设定格式，或切至“分页预览”核对分页。", feedback_bar)
+        self.update_message_label = QLabel("", self.feedback_bar)
         self.update_message_label.setObjectName("FeedbackInfo")
         fb_layout.addWidget(self.update_message_label, 1)
 
-        self.page_status_label = QLabel("1 / 1 页 · 86%", feedback_bar)
-        self.page_status_label.setObjectName("MutedHint")
-        fb_layout.addWidget(self.page_status_label)
+        dismiss_btn = QPushButton(self.feedback_bar)
+        dismiss_btn.setProperty("variant", "ghost")
+        dismiss_btn.setIcon(fluent_icon("close", PALETTE["text_muted"], 12))
+        dismiss_btn.setIconSize(QSize(12, 12))
+        dismiss_btn.setFixedSize(20, 20)
+        dismiss_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        dismiss_btn.clicked.connect(self.feedback_bar.hide)
+        fb_layout.addWidget(dismiss_btn)
 
-        root.addWidget(feedback_bar)
+        self.feedback_bar.hide()
+        root.addWidget(self.feedback_bar)
 
         # 双视图堆叠容器：0 = Word 风格富文本直编画布（默认），1 = 精确 A4 分页图像预览
         self.view_stack = QStackedWidget(self)
         self.view_stack.setStyleSheet("QStackedWidget { background: transparent; }")
 
         self.rich_editor = RichDocumentEditor(self.view_stack)
+        self.rich_editor.zoomChanged.connect(lambda _z: self._update_status(self.current_page()))
         self.view_stack.addWidget(self.rich_editor)
 
         # A4 连续纸张滚动区域
@@ -368,7 +376,6 @@ class PreviewPanel(QFrame):
         is_pages = mode == "pages"
         self.view_stack.setCurrentIndex(1 if is_pages else 0)
         self.pages_controls.setVisible(is_pages)
-        self.rich_mode_tip.setVisible(not is_pages)
         if is_pages:
             self.rich_editor.mini_bar.hide()
             self._visible_timer.start()
@@ -391,7 +398,7 @@ class PreviewPanel(QFrame):
         self.proof_button.style().unpolish(self.proof_button)
         self.proof_button.style().polish(self.proof_button)
 
-    def set_update_message(self, message: str, *, tone: str = "info") -> None:
+    def set_update_message(self, message: str, *, tone: str = "info", show_banner: bool | None = None) -> None:
         self.update_message_label.setText(message)
         color = {
             "info": PALETTE["accent_text"],
@@ -399,7 +406,9 @@ class PreviewPanel(QFrame):
             "warning": PALETTE["warning_text"],
             "error": PALETTE["danger_text"],
         }.get(tone, PALETTE["accent_text"])
-        self.update_message_label.setStyleSheet(f"font-size: 12px; color: {color}; background: transparent;")
+        self.update_message_label.setStyleSheet(f"QLabel {{ font-size: 12px; color: {color}; background: transparent; }}")
+        should_show = show_banner if show_banner is not None else (tone in {"success", "warning", "error"} and bool(message))
+        self.feedback_bar.setVisible(should_show)
 
     def update_message(self) -> str:
         return self.update_message_label.text()
@@ -709,7 +718,7 @@ class PreviewPanel(QFrame):
             card.set_active_check(index == page_index)
         self._scroll_page(page_index)
         tone = "success" if page_index in self.changed_pages else "info"
-        self.set_update_message(message, tone=tone)
+        self.set_update_message(message, tone=tone, show_banner=True)
 
     def scroll_to(self, key: Hashable, *, highlight: bool = True) -> None:
         """根据语义锚点同步滚动富文本纸面与分页预览到对应内容对象。"""
@@ -754,10 +763,12 @@ class PreviewPanel(QFrame):
         self.total_pages_label.setText(f"/ {total} 页")
         self.zoom_btn.setText(f"{pct}%")
         if self._view_mode == "rich":
-            rich_pct = round(self.rich_editor._zoom * 100)
-            self.page_status_label.setText(f"排版编辑 · {current} / {total} 页 · {rich_pct}%")
+            summary = f"约 {current} / {total} 页"
         else:
-            self.page_status_label.setText(f"{current} / {total} 页 · {pct}%")
+            summary = f"{current} / {total} 页 · {pct}%"
+        self.page_status_label.setText(summary)
+        self.page_status_label.setVisible(self._view_mode == "rich")
+        self.statusSummaryChanged.emit(summary)
         if not self.page_input.hasFocus():
             self.page_input.setText(str(current))
         self.prev_btn.setEnabled(current > 1)

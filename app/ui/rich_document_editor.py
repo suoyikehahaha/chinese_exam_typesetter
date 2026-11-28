@@ -550,10 +550,11 @@ class RichDocumentEditor(QWidget):
     batchApplyRequested = Signal()
     undoRequested = Signal()
     redoRequested = Signal()
+    zoomChanged = Signal(float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._zoom: float = 0.86
+        self._zoom: float = 0.94
         self._raw_exam: dict[str, Any] = {"metadata": {}, "blocks": []}
         self._layout_path: Path | None = None
         self._key_to_block_num: dict[str, int] = {}
@@ -670,7 +671,7 @@ class RichDocumentEditor(QWidget):
         z_out.clicked.connect(lambda: self.change_zoom(-0.08))
         r_layout.addWidget(z_out)
 
-        self.zoom_label = QLabel("86%", ribbon)
+        self.zoom_label = QLabel("94%", ribbon)
         self.zoom_label.setObjectName("MutedHint")
         self.zoom_label.setFixedWidth(36)
         self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -763,6 +764,18 @@ class RichDocumentEditor(QWidget):
             return
         self.set_zoom(max(0.55, min(1.25, (vw - 56) / _A4_WIDTH_PX)))
 
+    def auto_fit_if_needed(self) -> None:
+        """右栏展开/收起或窗口缩放时自动避免纸张溢出触发横向滚动条。"""
+
+        vw = self.scroll_area.viewport().width()
+        if vw <= 120:
+            return
+        max_fit = max(0.55, min(0.96, (vw - 48) / _A4_WIDTH_PX))
+        if self._zoom > max_fit + 0.01:
+            self.set_zoom(max_fit)
+        elif self._zoom < 0.94 and max_fit >= 0.94:
+            self.set_zoom(0.94)
+
     def change_zoom(self, delta: float) -> None:
         self.set_zoom(self._zoom + delta)
 
@@ -773,6 +786,7 @@ class RichDocumentEditor(QWidget):
         self._zoom = clamped
         self.zoom_label.setText(f"{round(self._zoom * 100)}%")
         self.paper_edit.set_zoom_factor(self._zoom)
+        self.zoomChanged.emit(self._zoom)
         if self._layout_path is not None:
             self.load_document(self._raw_exam, self._layout_path, preserve_scroll=True)
 

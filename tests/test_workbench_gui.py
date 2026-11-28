@@ -67,6 +67,20 @@ def select_question(app: CurrentDesktopApp, position: int = 0) -> dict:
     return app.raw_exam["blocks"][index]["question"]
 
 
+def edit_current_rich_text(app: CurrentDesktopApp, new_text: str, *, flush: bool = False) -> None:
+    """在仿真 A4 富文本画布中直接替换当前选中对象的正文文字。"""
+
+    item = app.selected_content_object
+    assert item is not None
+    rich = app.preview_panel.rich_editor
+    assert rich.select_object_range(item.key, 0, len(item.text))
+    cursor = rich.paper_edit.textCursor()
+    cursor.insertText(new_text)
+    if flush:
+        rich.flush_pending_text()
+    QApplication.processEvents()
+
+
 def preview_pages(tmp_path: Path, name: str, *, changed: bool = False) -> list[Path]:
     folder = tmp_path / name
     folder.mkdir()
@@ -98,14 +112,17 @@ def test_hierarchical_outline_and_collapsible_inspector(app):
     first_section = root_item.child(0)
     assert first_section.childCount() >= 1
 
-    # 右侧检查器可一键折叠与恢复
-    assert app._inspector_visible
-    app.toggle_inspector()
+    # 启动默认收起右栏以呈现超大沉浸 A4 纸面，支持一键展开与再收起
+    if app._inspector_visible:
+        app.toggle_inspector()
     assert not app._inspector_visible
     assert app.inspector_panel.isHidden()
     app.toggle_inspector()
     assert app._inspector_visible
     assert not app.inspector_panel.isHidden()
+    app.toggle_inspector()
+    assert not app._inspector_visible
+    assert app.inspector_panel.isHidden()
 
 
 def test_review_drawer_hidden_when_clean_and_shown_when_missing_score(app):
@@ -113,7 +130,9 @@ def test_review_drawer_hidden_when_clean_and_shown_when_missing_score(app):
     assert not app.outline_panel.review_drawer.rows
     assert app.outline_panel.review_drawer.isHidden()
 
-    # 清空一题分值后抽屉自动出现并支持跳转
+    # 清空一题分值后抽屉自动出现并支持跳转（自动展开右栏并切到“排版”页）
+    if app._inspector_visible:
+        app.toggle_inspector()
     select_question(app)
     app.inspector_panel.score_entry.setText("")
     app._refresh_score_display()
@@ -125,6 +144,7 @@ def test_review_drawer_hidden_when_clean_and_shown_when_missing_score(app):
     )
     app.outline_panel.review_drawer.toggle()
     app.outline_panel.review_drawer.activate_row(row)
+    assert app._inspector_visible
     assert app.inspector_panel.inspector_tabs.currentIndex() == 0
 
 
@@ -142,11 +162,10 @@ def test_reference_template_is_automatic_and_reset_uses_it(app):
 def test_text_switch_and_undo_roundtrip(app):
     question = select_question(app)
     original = question["stem"]
-    app.inspector_panel.stem_text.setPlainText("修改后的题干")
+    edit_current_rich_text(app, "修改后的题干", flush=False)
     option = next(item for item in app._content_objects if item.target == "option")
     app._select_object(option.key, navigate=False)
     assert question["stem"] == "修改后的题干"
-    assert app.inspector_panel.stem_text.toPlainText() == option.text
     app.undo_action()
     assert app.raw_exam["blocks"][app.selected_block_index]["question"]["stem"] == original
     app.redo_action()
@@ -164,13 +183,13 @@ def test_score_sixty_and_switching_questions(app):
 
 def test_header_fields_do_not_restore_stale_text(app):
     app.outline_panel.select_block(None, emit=True)
-    app.inspector_panel.inspector_tabs.setCurrentIndex(2)
+    app.inspector_panel.inspector_tabs.setCurrentIndex(1)
     QApplication.processEvents()
     app.inspector_panel.exam_name_edit.setText("页面设置修改的卷名")
     assert app._flush_edits(show_error=False)
     app.inspector_panel.inspector_tabs.setCurrentIndex(0)
     QApplication.processEvents()
-    assert app.inspector_panel.stem_text.toPlainText() == "页面设置修改的卷名"
+    assert "页面设置修改的卷名" in app.preview_panel.rich_editor.paper_edit.toPlainText()
     assert app._flush_edits(show_error=False)
     assert app.raw_exam["metadata"]["exam_name"] == "页面设置修改的卷名"
 
@@ -185,15 +204,15 @@ def test_invalid_page_setting_remains_blocked_after_debounce(app):
 
 def test_invalid_format_cannot_export_previous_value(app):
     select_question(app)
-    app.inspector_panel.size_combo.setCurrentText("nan")
+    app.inspector_panel.left_indent_edit.setText("nan")
     assert not app._flush_edits(show_error=False)
-    app.inspector_panel.size_combo.setCurrentText("10.5")
+    app.inspector_panel.left_indent_edit.setText("0")
     assert app._flush_edits(show_error=False)
 
 
 def test_import_cancels_old_editor_buffer_and_save_keeps_source_path(app, tmp_path):
     select_question(app)
-    app.inspector_panel.stem_text.setPlainText("上一份文件的文字")
+    edit_current_rich_text(app, "上一份文件的文字", flush=False)
     raw = json.loads((ROOT / "samples/exam.json").read_text(encoding="utf-8"))
     source = tmp_path / "新试卷.docx"
     app._apply_imported_exam(source, raw)
@@ -241,15 +260,17 @@ def test_preview_only_allocates_visible_page_images(app, tmp_path):
 def test_global_panel_is_compact_and_scope_is_clear(app):
     select_question(app)
     ins = app.inspector_panel
-    ins.inspector_tabs.setCurrentIndex(2)
+    assert ins.inspector_tabs.count() == 2
+    assert ins.inspector_tabs.tabText(0) == "排版"
+    assert ins.inspector_tabs.tabText(1) == "整卷"
+    ins.inspector_tabs.setCurrentIndex(1)
     QApplication.processEvents()
-    assert ins.inspector_tabs.tabText(2) == "整卷"
     assert ins.selection_title() == "整卷设置 · 影响所有页面"
     ins.header_settings_group.set_expanded(False)
     assert not ins.header_settings_group.expanded
     assert ins.header_settings_group.body.isHidden()
     assert ins.apply_page_settings_button.text() == "应用并查看"
-    ins.inspector_tabs.setCurrentIndex(1)
+    ins.inspector_tabs.setCurrentIndex(0)
     QApplication.processEvents()
     assert "影响所有页面" not in ins.selection_title()
 
@@ -339,13 +360,12 @@ def test_new_preview_immediately_reports_the_installed_page_count(app, tmp_path)
 
 
 def test_queued_preview_after_body_edit_is_discarded_and_immediate_export_uses_current_text(app, tmp_path):
-    select_question(app)
+    question = select_question(app)
     old_token = (app._session_generation, app._revision)
     app._displayed_revision = app._requested_revision = old_token
     ticket = app._preview_ticket
     app.raw_exam["metadata"]["page_spacing_scale"] = 0.82
-    app.inspector_panel.stem_text.setPlainText(app.inspector_panel.stem_text.toPlainText() + "正文校订")
-    app._schedule_text_commit()
+    edit_current_rich_text(app, question["stem"] + "正文校订", flush=True)
     app._on_preview_ready(
         ticket, PreviewResult(app._preview_generation, (), "internal", {}, 8, 1, 0.82)
     )
@@ -374,9 +394,8 @@ def test_queued_preview_after_body_edit_is_discarded_and_immediate_export_uses_c
 
 @pytest.mark.parametrize("outcome", ["cancel", "error", "success"])
 def test_pending_import_protects_old_editor_and_only_current_result_wins(app, tmp_path, outcome):
-    select_question(app)
-    app.inspector_panel.stem_text.setPlainText(app.inspector_panel.stem_text.toPlainText() + "旧稿校订")
-    app._commit_current_text(schedule_preview=False)
+    question = select_question(app)
+    edit_current_rich_text(app, question["stem"] + "旧稿校订", flush=True)
     prior = deepcopy(app.raw_exam)
     replacement = deepcopy(prior)
     replacement["metadata"]["exam_name"] = "新试卷"
@@ -389,8 +408,8 @@ def test_pending_import_protects_old_editor_and_only_current_result_wins(app, tm
     ):
         app._import_exam_path(tmp_path / "新试卷.docx")
         assert app._import_in_progress and not app.inspector_panel.pages_stack.isEnabled()
+        assert not app.preview_panel.rich_editor.isEnabled()
         app.undo_action()
-        assert not app._commit_current_text(schedule_preview=False)
         if outcome == "cancel":
             app.cancel_import()
         if outcome == "error":
@@ -410,9 +429,9 @@ def test_pending_import_protects_old_editor_and_only_current_result_wins(app, tm
 
 
 def test_downloaded_update_can_wait_and_install_must_check_dirty_draft(app, tmp_path):
-    select_question(app)
-    app.inspector_panel.stem_text.setPlainText(app.inspector_panel.stem_text.toPlainText() + "未保存")
-    path = tmp_path / "ChineseExamTypesetter_0.3.1.exe"
+    question = select_question(app)
+    edit_current_rich_text(app, question["stem"] + "未保存", flush=True)
+    path = tmp_path / "ChineseExamTypesetter_0.4.1.exe"
     with (
         patch.object(app, "_ask_yes_no", return_value=False),
         patch("app.ui.main_window.schedule_portable_update") as install,
@@ -456,14 +475,14 @@ def test_downloaded_update_can_wait_and_install_must_check_dirty_draft(app, tmp_
 
 
 def test_draft_save_and_save_as(app, tmp_path):
-    select_question(app)
+    question = select_question(app)
     first, second = tmp_path / "first.json", tmp_path / "second.json"
     with patch(
         "app.ui.session_actions.QFileDialog.getSaveFileName",
         side_effect=[(str(first), ""), (str(second), "")],
     ) as ask:
         assert app.save_project()
-        app.inspector_panel.stem_text.setPlainText(app.inspector_panel.stem_text.toPlainText() + "草稿保存")
+        edit_current_rich_text(app, question["stem"] + "草稿保存", flush=True)
         assert app.save_project()
         assert "草稿保存" in first.read_text(encoding="utf-8")
         assert app.save_project(save_as=True)
@@ -514,11 +533,10 @@ def test_image_and_source_marks_survive_actual_undo_redo(app, tmp_path):
 
     source = illustrated_file(tmp_path)
     app._apply_imported_exam(source, import_exam(source))
-    select_question(app)
+    question = select_question(app)
     for command, changed in ((None, True), (app.undo_action, False), (app.redo_action, True)):
         if command is None:
-            app.inspector_panel.stem_text.setPlainText(app.inspector_panel.stem_text.toPlainText() + "补入")
-            assert app._commit_current_text(schedule_preview=False)
+            edit_current_rich_text(app, question["stem"] + "补入", flush=True)
         else:
             command()
         file, _, _ = build_documents(app.raw_exam, LAYOUT, tmp_path, "redo")
@@ -624,4 +642,4 @@ def test_rich_editor_direct_text_edit_syncs_model_and_inspector(app):
     QApplication.processEvents()
 
     assert question["stem"].startswith("【直编验证】")
-    assert app.inspector_panel.stem_text.toPlainText().startswith("【直编验证】")
+    assert "【直编验证】" in rich.paper_edit.toPlainText()

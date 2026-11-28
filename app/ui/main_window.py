@@ -180,14 +180,13 @@ class CurrentDesktopApp(EditingActionsMixin, SessionActionsMixin, QMainWindow):
         self._pending_update: Path | None = None
         self._last_update_error: str | None = None
 
-        # 拖放兼容状态
+        # 拖放兼容状态（默认收起右栏，打开即享超大沉浸仿真 A4 纸面）
         self.drop_enabled = True
         self._drop_metrics = {"native_messages": 0, "qt_drops": 0}
-        self._inspector_visible = True
-        self._saved_inspector_width = 366
+        self._inspector_visible = False
+        self._saved_inspector_width = 336
 
         # 防抖定时器
-        self._text_commit_timer = self._make_single_timer(220, self._commit_text_after_delay)
         self._global_commit_timer = self._make_single_timer(280, lambda: self._commit_global_settings(show_error=False))
         self._preview_debounce_timer = self._make_single_timer(95, self.request_preview)
         self._autosave_timer = self._make_single_timer(1200, self._autosave)
@@ -389,24 +388,15 @@ class CurrentDesktopApp(EditingActionsMixin, SessionActionsMixin, QMainWindow):
         self.save_button.clicked.connect(self.save_project)
         h_layout.addWidget(self.save_button)
 
-        # 整卷设置快捷入口
-        self.page_settings_btn = QPushButton("整卷设置", header)
-        self.page_settings_btn.setProperty("variant", "ghost")
-        self.page_settings_btn.setIcon(fluent_icon("settings", PALETTE["text_secondary"], 15))
-        self.page_settings_btn.setIconSize(QSize(15, 15))
-        self.page_settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.page_settings_btn.clicked.connect(self.show_page_settings)
-        h_layout.addWidget(self.page_settings_btn)
-
-        # 折叠/展开右侧检查器按钮
-        self.inspector_toggle_btn = QPushButton(header)
+        # 展开/收起右侧精细排版与整卷面板（默认收起，不重复放“整卷设置”按钮）
+        self.inspector_toggle_btn = QPushButton("排版面板", header)
         self.inspector_toggle_btn.setProperty("variant", "ghost")
         self.inspector_toggle_btn.setCheckable(True)
-        self.inspector_toggle_btn.setChecked(True)
-        self.inspector_toggle_btn.setIcon(fluent_icon("panel_right", PALETTE["text_secondary"], 16))
-        self.inspector_toggle_btn.setIconSize(QSize(16, 16))
-        self.inspector_toggle_btn.setToolTip("展开 / 收起右侧属性检查器 (Ctrl+B)")
-        self.inspector_toggle_btn.setFixedSize(32, 32)
+        self.inspector_toggle_btn.setChecked(False)
+        self.inspector_toggle_btn.setIcon(fluent_icon("panel_right", PALETTE["text_secondary"], 15))
+        self.inspector_toggle_btn.setIconSize(QSize(15, 15))
+        self.inspector_toggle_btn.setToolTip("展开 / 收起右侧精细排版与整卷面板 (Ctrl+B)")
+        self.inspector_toggle_btn.setFixedHeight(32)
         self.inspector_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.inspector_toggle_btn.clicked.connect(self.toggle_inspector)
         h_layout.addWidget(self.inspector_toggle_btn)
@@ -445,7 +435,8 @@ class CurrentDesktopApp(EditingActionsMixin, SessionActionsMixin, QMainWindow):
         self.preview_panel.setMinimumWidth(440)
 
         self.inspector_panel = InspectorPanel(self.main_splitter)
-        self.inspector_panel.setMinimumWidth(316)
+        self.inspector_panel.setMinimumWidth(296)
+        self.inspector_panel.hide()
 
         self.main_splitter.addWidget(self.outline_panel)
         self.main_splitter.addWidget(self.preview_panel)
@@ -453,7 +444,7 @@ class CurrentDesktopApp(EditingActionsMixin, SessionActionsMixin, QMainWindow):
         self.main_splitter.setStretchFactor(0, 0)
         self.main_splitter.setStretchFactor(1, 1)
         self.main_splitter.setStretchFactor(2, 0)
-        self.main_splitter.setSizes([282, 792, 366])
+        self.main_splitter.setSizes([276, 1140, 0])
         self.main_splitter.splitterMoved.connect(self._save_ui_settings)
 
         ws_layout.addWidget(self.main_splitter)
@@ -506,14 +497,8 @@ class CurrentDesktopApp(EditingActionsMixin, SessionActionsMixin, QMainWindow):
         ins = self.inspector_panel
         ins.tabChanged.connect(self._on_inspector_tab_changed)
         ins.collapseRequested.connect(self.toggle_inspector)
-        ins.objectSelected.connect(lambda key: self._select_object(key, navigate=True))
-        ins.textEdited.connect(self._schedule_text_commit)
-        ins.selectionChangedHint.connect(self._update_selection_hint)
         ins.identityChanged.connect(self._on_identity_changed)
         ins.scoreCommitted.connect(self._commit_score_entry)
-        ins.fontChanged.connect(self._on_font_changed)
-        ins.inlineDecorationRequested.connect(self._on_inspector_inline_decoration)
-        ins.clearInlineRequested.connect(self._on_inspector_clear_inline)
         ins.paragraphChanged.connect(self._on_paragraph_changed)
         ins.optionsChanged.connect(self._on_options_changed)
         ins.batchApplyRequested.connect(self._apply_same_type)
@@ -595,7 +580,7 @@ class CurrentDesktopApp(EditingActionsMixin, SessionActionsMixin, QMainWindow):
         return super().nativeEvent(event_type, message)
 
     def toggle_inspector(self) -> None:
-        """一键收起或展开右侧属性检查器，让中小屏预览更沉浸。"""
+        """一键收起或展开右侧精细排版与整卷面板，并自动适配纸面宽度避免横向滚动条。"""
 
         if self._inspector_visible:
             sizes = self.main_splitter.sizes()
@@ -611,15 +596,16 @@ class CurrentDesktopApp(EditingActionsMixin, SessionActionsMixin, QMainWindow):
             sizes = self.main_splitter.sizes()
             if len(sizes) == 3:
                 total = sum(sizes)
-                right = min(max(310, self._saved_inspector_width), max(310, total // 3))
+                right = min(max(296, self._saved_inspector_width), max(296, total // 3))
                 left = sizes[0] or 276
                 self.main_splitter.setSizes([left, max(440, total - left - right), right])
+        QTimer.singleShot(0, self.preview_panel.rich_editor.auto_fit_if_needed)
 
     def show_page_settings(self) -> None:
         self._flush_edits(show_error=False)
         if not self._inspector_visible:
             self.toggle_inspector()
-        self.inspector_panel.inspector_tabs.setCurrentIndex(2)
+        self.inspector_panel.inspector_tabs.setCurrentIndex(1)
 
     def focus_search(self) -> None:
         self.outline_panel.focus_search()
@@ -636,7 +622,7 @@ class CurrentDesktopApp(EditingActionsMixin, SessionActionsMixin, QMainWindow):
 
     def _set_settings_message(self, message: str, *, tone: str = "info") -> None:
         self.inspector_panel.set_page_settings_status(message, tone=tone)
-        self.preview_panel.set_update_message(message, tone=tone)
+        self.preview_panel.set_update_message(message, tone=tone, show_banner=(tone == "error"))
 
 
     # ==================== 刷盘、状态刷新、持久化与关闭 ====================
@@ -652,9 +638,8 @@ class CurrentDesktopApp(EditingActionsMixin, SessionActionsMixin, QMainWindow):
                 self._format_spec_from_controls()
             except ValueError:
                 if show_error:
-                    self._show_error("当前格式参数无效，请检查字号、缩进和行距后重试。")
+                    self._show_error("当前格式参数无效，请检查缩进与段距后重试。")
                 return False
-        self._text_commit_timer.stop()
         if not self.apply_current_question(silent=not show_error):
             return False
         if (self._global_commit_timer.isActive() or self._global_invalid) and not self._commit_global_settings(
@@ -699,8 +684,9 @@ class CurrentDesktopApp(EditingActionsMixin, SessionActionsMixin, QMainWindow):
         self._settings_feedback = None
         self._preview_settings_feedback = None
         self._set_settings_message("修改后自动更新，也可点击应用并查看。", tone="info")
+        self.preview_panel.rich_editor._commit_timer.stop()
+        self.preview_panel.rich_editor._pending_edited_blocks.clear()
         for timer in (
-            self._text_commit_timer,
             self._global_commit_timer,
             self._preview_debounce_timer,
             self._autosave_timer,
@@ -724,7 +710,7 @@ class CurrentDesktopApp(EditingActionsMixin, SessionActionsMixin, QMainWindow):
     def _save_ui_settings(self) -> None:
         settings = self._read_ui_settings()
         sizes = self.main_splitter.sizes()
-        if len(sizes) == 3 and sum(sizes) > 0:
+        if len(sizes) == 3 and sum(sizes) > 0 and self._inspector_visible:
             settings["splitter_sizes"] = sizes
         settings["window_size"] = [self.width(), self.height()]
         path = self._ui_settings_path()
@@ -755,7 +741,8 @@ class CurrentDesktopApp(EditingActionsMixin, SessionActionsMixin, QMainWindow):
 
         sizes = settings.get("splitter_sizes")
         if isinstance(sizes, list) and len(sizes) == 3 and all(isinstance(v, int) and v >= 200 for v in sizes):
-            self.main_splitter.setSizes(sizes)
+            self._saved_inspector_width = sizes[2]
+            self.main_splitter.setSizes([sizes[0], max(440, default_w - sizes[0] - 24), 0])
 
     def _close_with_update(self, update_path: Path | None) -> None:
         if self._closing:

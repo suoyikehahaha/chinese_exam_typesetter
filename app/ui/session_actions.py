@@ -139,13 +139,13 @@ class SessionActionsMixin:
             self._settings_feedback = None
             self._preview_settings_feedback = None
         else:
-            self.preview_panel.set_update_message("已按当前设置生成预览", tone="info")
+            self.preview_panel.set_update_message("已按当前设置生成预览", tone="info", show_banner=False)
 
         document_kind = str(self.raw_exam.get("document_kind", "exam"))
         if proof:
             message = f"{result.engine} 打印校对 · 共 {result.actual_pages} 页"
             self._set_status(message)
-            self.preview_panel.set_update_message(message + " · 修改后自动返回快速预览", tone="success")
+            self.preview_panel.set_update_message(message + " · 修改后自动返回快速预览", tone="success", show_banner=True)
         elif document_kind == "exam_with_answer":
             self._set_status(f"预览估算 {result.actual_pages} 页（含答案）；打印分页以 Word 文档为准")
         elif document_kind == "answer":
